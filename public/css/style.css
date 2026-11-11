@@ -1,15 +1,19 @@
-/* Mr.Clean brand: rose pink + warm charcoal, taken from the shop sign. */
+/* Mr.Clean brand, from the shop door sign: black with gold stripes, red arch and red tagline. */
 :root {
-  --bg: #f7f4f4;
+  --bg: #f6f5f1;
   --surface: #ffffff;
-  --surface-2: #faf7f7;
-  --border: #ebe3e4;
-  --text: #1f1a1b;
-  --muted: #6f6466;
-  --primary: #b8354f;
+  --surface-2: #faf9f5;
+  --border: #e7e3d6;
+  --text: #16150f;
+  --muted: #6b675a;
+  --primary: #c8161e;
   --primary-ink: #ffffff;
-  --primary-soft: #fbe9ed;
-  --brand-pink: #f0899b;
+  --primary-soft: #fde8e8;
+  --red: #e3242b;
+  --gold: #c9b26b;
+  --gold-strong: #a08a45;
+  --gold-soft: #f4efdc;
+  --black: #0d0d0c;
   --blue: #1d4ed8;
   --blue-soft: #dbeafe;
   --success: #15803d;
@@ -20,25 +24,29 @@
   --danger-soft: #fee2e2;
   --info: #6d28d9;
   --info-soft: #ede9fe;
-  --sidebar: #2b2425;
-  --sidebar-ink: #d9cfd0;
+  --sidebar: #0d0d0c;
+  --sidebar-ink: #ddd6c1;
+  --stripes: repeating-linear-gradient(90deg, rgba(201, 178, 107, 0.09) 0 16px, transparent 16px 38px);
   --radius: 12px;
-  --shadow: 0 1px 2px rgba(43, 36, 37, 0.06), 0 4px 16px rgba(43, 36, 37, 0.05);
+  --shadow: 0 1px 2px rgba(13, 13, 12, 0.06), 0 4px 16px rgba(13, 13, 12, 0.05);
   --font: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   color-scheme: light;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #161213;
-    --surface: #211b1c;
-    --surface-2: #1b1617;
-    --border: #3a3032;
-    --text: #f1e9ea;
-    --muted: #b3a5a8;
-    --primary: #f0899b;
-    --primary-ink: #2a0d14;
-    --primary-soft: #3d1e25;
+    --bg: #0b0b0a;
+    --surface: #151513;
+    --surface-2: #1b1a17;
+    --border: #2e2b22;
+    --text: #f2efe6;
+    --muted: #a9a291;
+    /* black & gold in the dark theme; red stays for the logo and tagline */
+    --primary: #d9c27a;
+    --primary-ink: #0d0d0c;
+    --primary-soft: #2c2716;
+    --gold-strong: #d9c27a;
+    --gold-soft: #2c2716;
     --blue: #8ab4ff;
     --blue-soft: #16264a;
     --success: #4ade80;
@@ -49,7 +57,7 @@
     --danger-soft: #3a1414;
     --info: #a78bfa;
     --info-soft: #251b45;
-    --sidebar: #120e0f;
+    --sidebar: #070707;
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
     color-scheme: dark;
   }
@@ -79,7 +87,8 @@ code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monosp
 /* ---------- Layout ---------- */
 .layout { display: grid; grid-template-columns: 240px 1fr; min-height: 100vh; }
 .sidebar {
-  background: var(--sidebar);
+  background: var(--stripes), var(--sidebar);
+  border-right: 1px solid rgba(201, 178, 107, 0.25);
   color: var(--sidebar-ink);
   padding: 20px 14px;
   position: sticky;
@@ -94,7 +103,7 @@ code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monosp
 .brand .logo svg, .logo svg { display: block; width: 100%; height: auto; }
 .brand-text { display: flex; flex-direction: column; line-height: 1.2; min-width: 0; }
 .brand-text b { font-size: 1rem; font-weight: 800; letter-spacing: -0.01em; }
-.brand-text small { color: var(--brand-pink); font-size: 0.74rem; font-weight: 600; }
+.brand-text small { align-self: flex-start; margin-top: 4px; background: var(--red); color: #fff; font-size: 0.7rem; font-weight: 700; padding: 1px 8px; border-radius: 6px; letter-spacing: 0.01em; }
 .brand-badge { align-self: flex-start; margin-top: 5px; font-size: 0.64rem; background: rgba(255, 255, 255, 0.12); color: #fff; padding: 1px 8px; border-radius: 99px; font-weight: 700; letter-spacing: 0.06em; }
 .topbar .logo { width: 34px; }
 .nav a {
@@ -294,7 +303,7 @@ dl.kv dd { margin: 0; font-weight: 500; }
 .vehicle-card { display: flex; flex-direction: column; gap: 10px; }
 .vehicle-card .top { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
 .vehicle-card .name { font-weight: 700; font-size: 1.05rem; }
-.loyalty { background: linear-gradient(135deg, #b8354f, #4a1e2a); color: #fff; border: 0; }
+.loyalty { background: var(--stripes), linear-gradient(135deg, #c8161e, #0d0d0c 85%); color: #fff; border: 0; }
 .loyalty .label, .loyalty .sub { color: rgba(255, 255, 255, 0.85); }
 .progress { background: rgba(255, 255, 255, 0.25); border-radius: 99px; height: 8px; overflow: hidden; margin-top: 8px; }
 .progress > div { background: #fff; height: 100%; }
@@ -329,20 +338,20 @@ dl.kv dd { margin: 0; font-weight: 500; }
 
 /* ---------- Landing / auth ---------- */
 .landing { min-height: 100vh; display: grid; grid-template-columns: 1.2fr 1fr; }
-.hero { background: radial-gradient(120% 90% at 85% 0%, #5a2a35 0%, transparent 60%), linear-gradient(160deg, #1d1718 0%, #2b2425 60%, #3a2c2e 100%); color: #fff; padding: 48px 56px; display: flex; flex-direction: column; gap: 28px; }
+.hero { background: linear-gradient(90deg, rgba(13,13,12,.92) 0%, rgba(13,13,12,.72) 55%, rgba(13,13,12,.45) 100%), repeating-linear-gradient(90deg, #a99d65 0 22px, #0d0d0c 22px 52px); color: #fff; padding: 48px 56px; display: flex; flex-direction: column; gap: 28px; }
 .hero .brand { padding: 0; gap: 16px; }
 .hero .brand .logo { width: 96px; }
 .hero .brand-text b { font-size: 1.5rem; }
 .hero .brand-text small { font-size: 1rem; }
 .hero h1 { font-size: 2.5rem; letter-spacing: -0.02em; }
-.hero h1 em { font-style: normal; color: var(--brand-pink); }
-.hero p.lead { font-size: 1.08rem; color: #e3d7d9; max-width: 560px; }
+.hero h1 em { font-style: normal; color: var(--gold); }
+.hero p.lead { font-size: 1.08rem; color: #e6e1d2; max-width: 560px; }
 .hero .svc { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; max-width: 660px; }
 .hero .svc div { background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 12px; padding: 14px 16px; }
 .hero .svc b { display: flex; justify-content: space-between; gap: 10px; }
-.hero .svc b span:last-child { color: var(--brand-pink); white-space: nowrap; }
-.hero .svc small { color: #cbbcbf; display: block; margin-top: 4px; }
-.hero .meta { margin-top: auto; color: #cbbcbf; font-size: 0.9rem; }
+.hero .svc b span:last-child { color: var(--gold); white-space: nowrap; }
+.hero .svc small { color: #c9c3b1; display: block; margin-top: 4px; }
+.hero .meta { margin-top: auto; color: #c9c3b1; font-size: 0.9rem; }
 .auth { display: flex; align-items: center; justify-content: center; padding: 40px 24px; }
 .auth .card { width: 100%; max-width: 420px; padding: 28px; }
 .tabs { display: flex; gap: 4px; background: var(--surface-2); padding: 4px; border-radius: 10px; margin-bottom: 20px; border: 1px solid var(--border); }
@@ -371,7 +380,7 @@ dl.kv dd { margin: 0; font-weight: 500; }
 .badge.overdue, .badge.expired { background: var(--danger-soft); color: var(--danger); border-color: transparent; }
 .badge.cat { background: var(--primary-soft); color: var(--primary); border-color: transparent; }
 .protections { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
-.protection { border: 1px solid var(--border); border-left: 4px solid var(--primary); border-radius: 10px; padding: 12px 14px; background: var(--surface); display: flex; flex-direction: column; gap: 6px; }
+.protection { border: 1px solid var(--border); border-left: 4px solid var(--gold-strong); border-radius: 10px; padding: 12px 14px; background: var(--surface); display: flex; flex-direction: column; gap: 6px; }
 .protection.expired { border-left-color: var(--border); opacity: 0.75; }
 .protection .p-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
 .protection .p-name { font-weight: 700; }
@@ -419,8 +428,23 @@ body.role-employee a[href^="#/customers"] { pointer-events: none; color: inherit
 /* Shop tablet (/staff): only the PIN pad */
 .staff-brand { display: none; }
 .staff-mode .hero { display: none; }
-.staff-mode .landing { grid-template-columns: 1fr; background: var(--sidebar); }
+.staff-mode .landing { grid-template-columns: 1fr; background: repeating-linear-gradient(90deg, rgba(201, 178, 107, 0.22) 0 22px, transparent 22px 52px), #0d0d0c; }
 .staff-mode .auth { min-height: 100vh; }
 .staff-mode .staff-brand { display: flex; justify-content: center; color: var(--text); padding: 0 0 18px; }
-.staff-mode .staff-brand .logo { width: 64px; background: #2b2425; border-radius: 12px; padding: 8px; }
+.staff-mode .staff-brand .logo { width: 64px; background: #0d0d0c; border-radius: 12px; padding: 8px; border: 1px solid var(--gold); }
 .inv-actions { flex-wrap: nowrap; }
+
+/* Black & gold details */
+.nav a.active { box-shadow: inset 3px 0 0 var(--gold); }
+.card-head h2, .page-head h1 { letter-spacing: -0.01em; }
+.stat .value { color: var(--text); }
+.grid > .card.stat { border-top: 3px solid var(--gold); }
+.hero .svc div { border-color: rgba(201, 178, 107, 0.35); background: rgba(13, 13, 12, 0.55); }
+.hero .brand-text small { font-size: 0.9rem; padding: 2px 10px; }
+.chip { background: var(--gold-soft); color: var(--gold-strong); }
+.badge.cat { background: var(--gold-soft); color: var(--gold-strong); }
+.topbar .logo { background: #0d0d0c; border-radius: 8px; padding: 4px; }
+.sidebar .brand-text small { white-space: nowrap; font-size: 0.64rem; padding: 1px 6px; }
+.loyalty .value { color: #fff; }
+.grid > .card.stat.loyalty { border-top: 3px solid var(--gold); }
+@media (prefers-color-scheme: dark) { .btn-success { color: #052e16; } }

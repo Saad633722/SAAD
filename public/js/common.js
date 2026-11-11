@@ -6,7 +6,7 @@
 
   // Logo mark: the pink arch with a car from the Mr.Clean sign.
   const LOGO = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="6 28 108 58" aria-hidden="true">
-    <path d="M10 82a50 50 0 0 1 100 0h-14a36 36 0 0 0-72 0z" fill="#f0899b"/>
+    <path d="M10 82a50 50 0 0 1 100 0h-14a36 36 0 0 0-72 0z" fill="#e3242b"/>
     <g fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
       <path d="M46.5 59 51 50.5c.6-1.2 1.6-1.8 2.9-1.8h12.2c1.3 0 2.3.6 2.9 1.8l4.5 8.5"/>
       <path d="M36 71v-6.5c0-3.4 2.3-5.6 5.6-5.8h36.8c3.3.2 5.6 2.4 5.6 5.8V71c0 1.8-1.2 3-3 3H39c-1.8 0-3-1.2-3-3z"/>

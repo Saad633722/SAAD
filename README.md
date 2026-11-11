@@ -7,6 +7,8 @@ The booking and management web app for **Mr.Clean Car Detailing & PPF Ceramic Co
 - **Inventory**: chemicals, polishes, coatings, PPF film and supplies, deducted automatically as jobs are completed.
 - **Customer panel** (`/app`): customers register, add their cars, book services, follow the job while it's in the shop, and see their car's history and warranties.
 
+The look follows the shop sign: black with gold stripes, the red arch logo and the red “& PPF Ceramic Coating” tagline (with a black-and-gold dark mode).
+
 It is built with Node.js, Express and SQLite (the `node:sqlite` module that ships with Node). The frontend is plain HTML, CSS and JS, so there is no build step and only one npm dependency.
 
 ![Vehicle history](docs/screenshots/admin-vehicle-history.png)
