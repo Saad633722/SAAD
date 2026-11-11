@@ -1,8 +1,9 @@
 'use strict';
 
 /**
- * Fills the database with realistic demo data: customers, vehicles and several
- * months of wash history, plus today's queue and some upcoming bookings.
+ * Fills the database with realistic demo data for Mr.Clean Car Detailing:
+ * customers, vehicles and ~6 months of history (washes, detailing, ceramic
+ * coatings and PPF with warranties), plus today's queue and upcoming jobs.
  *
  *   npm run seed:demo              (uses DB_PATH or data/carwash.db)
  *
@@ -56,28 +57,35 @@ const vehicles = [
   db.run('INSERT INTO vehicles (owner_id, plate, make, model, year, color, type, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', owner, B.normalizePlate(plateRaw), make, model, year, color, type, ts(daysAgo(190, 9))).id,
 );
 
-const packages = db.all("SELECT * FROM services WHERE kind = 'package'");
-const addons = db.all("SELECT * FROM services WHERE kind = 'addon'");
+const services = db.all('SELECT * FROM services');
+const byName = (name) => {
+  const s = services.find((x) => x.name === name);
+  if (!s) throw new Error(`Unknown service ${name}`);
+  return s;
+};
+const washes = services.filter((s) => s.kind === 'package' && s.category === 'wash');
+const detailing = services.filter((s) => s.kind === 'package' && s.category === 'detailing' && s.name !== 'Paint Correction');
+const extras = services.filter((s) => s.kind === 'addon' && !s.warranty_months);
 const staff = db.all('SELECT * FROM staff');
-const feedback = ['Spotless, thank you!', 'Great job as always.', 'Quick and friendly.', 'Interior looks brand new.', 'A bit of a wait but worth it.', null, null];
+const feedback = ['Spotless, thank you!', 'Great job as always.', 'Quick and friendly.', 'Interior looks brand new.', 'The coating looks incredible.', 'A bit of a wait but worth it.', null, null];
 const settings = db.getSettings();
 
-function makeBooking(vehicleId, { day, hour, status, payment = 'paid', rating }) {
+function makeBooking(vehicleId, { day, hour, status, payment = 'paid', rating, pkg, addons }) {
   const v = db.get('SELECT * FROM vehicles WHERE id = ?', vehicleId);
-  const pkg = rand() < 0.55 ? packages[1] : pick(packages);
-  const extras = addons.filter(() => rand() < 0.2).map((a) => a.id);
+  const service = pkg ? byName(pkg) : rand() < 0.7 ? pick(washes) : pick(detailing);
+  const addonIds = addons ? addons.map((n) => byName(n).id) : extras.filter(() => rand() < 0.15).map((a) => a.id);
   const scheduled = daysAgo(day, hour, pick([0, 30]));
   const id = B.createBooking(db, {
     vehicle: v,
     customerId: v.owner_id,
-    serviceId: pkg.id,
-    addonIds: extras,
+    serviceId: service.id,
+    addonIds,
     scheduledAt: ts(scheduled).slice(0, 16),
     source: v.owner_id && rand() < 0.75 ? 'online' : 'walk_in',
     status: 'pending',
-    staffId: pick(staff).id,
+    staffId: service.category === 'ppf' || service.category === 'ceramic' ? staff[1].id : pick(staff).id,
     bay: 1 + Math.floor(rand() * settings.bays),
-    customerNotes: rand() < 0.15 ? pick(['Please be careful with the roof rack.', 'Dog hair in the back seats.', 'Skip the air freshener please.']) : null,
+    customerNotes: rand() < 0.15 ? pick(['Please be careful with the roof rack.', 'Dog hair in the back seats.', 'Stone chips on the bonnet.']) : null,
   });
   const b = db.get('SELECT * FROM bookings WHERE id = ?', id);
   const created = new Date(scheduled.getTime() - 2 * 86400000);
@@ -90,7 +98,7 @@ function makeBooking(vehicleId, { day, hour, status, payment = 'paid', rating })
   if (status === 'confirmed') return db.run("UPDATE bookings SET status = 'confirmed' WHERE id = ?", id), id;
   if (status === 'cancelled' || status === 'no_show') {
     ev(status, scheduled, status === 'cancelled' ? 'Cancelled by customer' : null);
-    db.run(`UPDATE bookings SET status = ?, cancelled_at = ? WHERE id = ?`, status, status === 'cancelled' ? ts(scheduled) : null, id);
+    db.run('UPDATE bookings SET status = ?, cancelled_at = ? WHERE id = ?', status, status === 'cancelled' ? ts(scheduled) : null, id);
     return id;
   }
   const started = new Date(scheduled.getTime() + 5 * 60000);
@@ -99,7 +107,8 @@ function makeBooking(vehicleId, { day, hour, status, payment = 'paid', rating })
     db.run("UPDATE bookings SET status = 'in_progress', started_at = ? WHERE id = ?", ts(started), id);
     return id;
   }
-  const done = new Date(started.getTime() + b.duration_min * 60000);
+  const ready = B.readyAt(settings, ts(started).slice(0, 16), b.duration_min);
+  const done = ready ? new Date(ready.replace(' ', 'T')) : new Date(started.getTime() + b.duration_min * 60000);
   ev('completed', done);
   const earned = v.owner_id ? Math.floor(b.total * settings.points_per_unit) : 0;
   if (earned) db.run('UPDATE users SET loyalty_points = loyalty_points + ? WHERE id = ?', earned, v.owner_id);
@@ -115,33 +124,60 @@ function makeBooking(vehicleId, { day, hour, status, payment = 'paid', rating })
     feedback[Math.floor(rand() * feedback.length)],
     id,
   );
+  B.recordProtections(db, id, ts(done));
   return id;
 }
 
+// Special jobs per vehicle (index into `vehicles`), and the day a customer stopped coming.
+const PLAN = {
+  0: { special: [{ day: 150, pkg: 'Ceramic Coating – 3 Years', addons: ['Glass Ceramic Coating'] }] },
+  2: { special: [{ day: 160, pkg: 'PPF – Front Package' }] },
+  3: { special: [{ day: 125, pkg: 'Ceramic Coating – 1 Year' }], lastVisit: 100 }, // maintenance now overdue
+  5: { special: [{ day: 60, pkg: 'PPF – Full Body', addons: ['Wheel & Caliper Coating'] }] },
+};
+
 db.tx(() => {
-  // History: each vehicle visits every ~2–4 weeks over the last ~6 months.
   vehicles.forEach((vid, i) => {
-    let day = 170 - i * 7;
-    while (day > 2) {
+    const plan = PLAN[i] || { special: [] };
+    const visits = plan.special.map((s) => ({ ...s, status: 'completed', rating: 5 }));
+    for (let day = 170 - i * 7; day > 2; day -= 12 + Math.floor(rand() * 20)) {
+      if (plan.lastVisit && day < plan.lastVisit) break;
+      if (plan.special.some((s) => Math.abs(s.day - day) < 6)) continue;
       const r = rand();
-      const status = r < 0.85 ? 'completed' : r < 0.95 ? 'cancelled' : 'no_show';
-      makeBooking(vid, { day, hour: 8 + Math.floor(rand() * 9), status });
-      day -= 12 + Math.floor(rand() * 20);
+      visits.push({ day, status: r < 0.86 ? 'completed' : r < 0.95 ? 'cancelled' : 'no_show' });
     }
+    if (plan.lastVisit && !visits.some((v) => v.day === plan.lastVisit)) visits.push({ day: plan.lastVisit, status: 'completed' });
+    visits.sort((a, b) => b.day - a.day);
+    for (const v of visits) makeBooking(vid, { ...v, hour: v.pkg ? 9 : 8 + Math.floor(rand() * 9) });
   });
-  // Today: a mix of queue states.
-  makeBooking(vehicles[0], { day: 0, hour: 8, status: 'completed', payment: 'paid', rating: 5 });
-  makeBooking(vehicles[3], { day: 0, hour: 9, status: 'completed', payment: 'unpaid' });
-  makeBooking(vehicles[2], { day: 0, hour: new Date().getHours(), status: 'in_progress' });
-  makeBooking(vehicles[5], { day: 0, hour: Math.min(17, new Date().getHours() + 1), status: 'confirmed' });
-  makeBooking(vehicles[4], { day: 0, hour: Math.min(17, new Date().getHours() + 2), status: 'pending' });
-  // Upcoming
-  makeBooking(vehicles[1], { day: -2, hour: 11, status: 'pending' });
+
+  // Today's queue
+  const h = new Date().getHours();
+  makeBooking(vehicles[0], { day: 0, hour: 8, status: 'completed', payment: 'paid', rating: 5, pkg: 'Wash & Vacuum' });
+  makeBooking(vehicles[6], { day: 0, hour: 9, status: 'completed', payment: 'unpaid', pkg: 'Exterior Wash', addons: ['Tire Shine'] });
+  makeBooking(vehicles[7], { day: 1, hour: 9, status: 'in_progress', pkg: 'PPF – Front Package' }); // multi-day job started yesterday
+  makeBooking(vehicles[2], { day: 0, hour: Math.min(h, 16), status: 'in_progress', pkg: 'Full Car Detailing' });
+  makeBooking(vehicles[5], { day: 0, hour: Math.min(17, h + 1), status: 'confirmed', pkg: 'Exterior Wash' });
+  makeBooking(vehicles[4], { day: 0, hour: Math.min(17, h + 2), status: 'pending', pkg: 'Interior Detailing' });
+  // Upcoming: a 1-day ceramic coating
+  makeBooking(vehicles[1], { day: -2, hour: 9, status: 'pending', pkg: 'Ceramic Coating – 1 Year' });
+
+  // A coating done before the shop started using the app, warranty about to run out
+  const applied = B.addDays(B.addMonths(now().slice(0, 10), -36), 12);
+  db.run(
+    `INSERT INTO vehicle_protections (vehicle_id, name, category, applied_at, warranty_months, warranty_until, maintenance_months, details, created_at)
+     VALUES (?, 'Ceramic Coating – 3 Years', 'ceramic', ?, 36, ?, 6, '2 layers on paint, 1 on wheels. Record added from the paper job card.', ?)`,
+    vehicles[4],
+    applied,
+    B.addMonths(applied, 36),
+    now(),
+  );
 
   const note = (vid, kind, text, day) => db.run('INSERT INTO vehicle_notes (vehicle_id, kind, note, author_name, created_at) VALUES (?, ?, ?, ?, ?)', vid, kind, text, 'Administrator', ts(daysAgo(day, 10)));
   note(vehicles[0], 'damage', 'Small dent on rear left door (pre-existing, photographed).', 120);
-  note(vehicles[0], 'preference', 'Customer prefers no tyre shine.', 60);
+  note(vehicles[0], 'preference', 'Customer prefers no tire shine.', 60);
   note(vehicles[2], 'warning', 'Aftermarket roof rack — no automatic brushes.', 90);
+  note(vehicles[5], 'general', 'Full-body PPF — use pH-neutral shampoo only, no polishing compounds.', 55);
   note(vehicles[6], 'general', 'Regular walk-in, usually pays cash.', 40);
 });
 

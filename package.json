@@ -1,7 +1,7 @@
 {
-  "name": "carwash-manager",
+  "name": "mrclean-detailing",
   "version": "1.0.0",
-  "description": "Car wash management app with an admin panel (incl. per-vehicle history) and a customer panel",
+  "description": "Mr.Clean Car Detailing & PPF Ceramic Coating: booking and management app with admin and customer panels",
   "main": "server.js",
   "private": true,
   "engines": {

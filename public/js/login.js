@@ -42,9 +42,15 @@
   try {
     const [{ settings }, { services }] = await Promise.all([UI.loadSettings(), api('GET', '/api/services')]);
     document.title = `${settings.business_name} — Sign in`;
-    document.getElementById('services').innerHTML = services
-      .filter((s) => s.kind === 'package')
-      .map((s) => `<div><b><span>${esc(s.name)}</span><span>${esc(money(s.price))}</span></b><small>${esc(s.description || '')}</small></div>`)
+    const packages = services.filter((s) => s.kind === 'package');
+    document.getElementById('services').innerHTML = UI.byCategory(packages)
+      .map(([cat, list]) => {
+        const from = Math.min(...list.map((s) => s.price));
+        const warranty = Math.max(0, ...list.map((s) => s.warranty_months || 0));
+        const names = list.map((s) => s.name.replace(/^(Ceramic Coating|PPF) – /, '')).join(' · ');
+        return `<div><b><span>${esc(UI.CATEGORY[cat] || cat)}</span><span>from ${esc(money(from))}</span></b>
+          <small>${esc(names)}${warranty ? ` · warranty up to ${esc(UI.fmtMonths(warranty))}` : ''}</small></div>`;
+      })
       .join('');
     const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
     document.getElementById('hours').textContent =

@@ -64,6 +64,8 @@ module.exports = function customerRoutes(db) {
          FROM vehicles v WHERE v.owner_id = ? ORDER BY v.id`,
       req.user.id,
     );
+    const protections = B.protectionsByVehicle(db, vehicles.map((v) => v.id));
+    for (const v of vehicles) v.protections = protections.get(v.id);
     res.json({ vehicles });
   });
 
@@ -188,7 +190,8 @@ module.exports = function customerRoutes(db) {
 
   r.post('/bookings', (req, res) => {
     const vehicle = ownVehicle(req, req.body.vehicle_id);
-    const scheduledAt = B.assertSlotBookable(db, req.body.scheduled_at);
+    const { duration } = B.quote(db, { serviceId: req.body.service_id, addonIds: req.body.addon_ids || [], vehicleType: vehicle.type });
+    const scheduledAt = B.assertSlotBookable(db, req.body.scheduled_at, { duration });
     const clash = db.get(`SELECT code FROM bookings WHERE vehicle_id = ? AND status IN ('pending','confirmed','in_progress')`, vehicle.id);
     if (clash) throw new HttpError(409, `This vehicle already has an active booking (${clash.code}).`);
     const id = B.createBooking(db, {
@@ -201,6 +204,7 @@ module.exports = function customerRoutes(db) {
       customerNotes: req.body.notes,
       source: 'online',
       actorName: req.user.name,
+      enforceSlot: true,
     });
     res.status(201).json({ booking: forCustomer(B.bookingDetail(db, id)) });
   });
@@ -215,7 +219,7 @@ module.exports = function customerRoutes(db) {
   r.post('/bookings/:id/reschedule', (req, res) => {
     const b = ownBooking(req, req.params.id);
     if (!['pending', 'confirmed'].includes(b.status)) throw new HttpError(400, 'This booking can no longer be rescheduled.');
-    const scheduledAt = B.assertSlotBookable(db, req.body.scheduled_at);
+    const scheduledAt = B.assertSlotBookable(db, req.body.scheduled_at, { duration: b.duration_min, excludeId: b.id });
     db.tx(() => {
       db.run("UPDATE bookings SET scheduled_at = ?, status = 'pending' WHERE id = ?", scheduledAt, b.id);
       B.addEvent(db, b.id, 'pending', `Rescheduled from ${b.scheduled_at} to ${scheduledAt}`, req.user.name);

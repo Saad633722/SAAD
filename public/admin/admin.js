@@ -8,6 +8,7 @@
   if (!me.user || me.user.role !== 'admin') return (location.href = '/');
   UI.bindShell(me.user);
   await UI.loadSettings();
+  document.title = `Admin — ${UI.state.settings.business_name}`;
 
   async function refreshCatalog() {
     const [s, st] = await Promise.all([api('GET', '/api/admin/services'), api('GET', '/api/admin/staff')]);
@@ -18,10 +19,10 @@
 
   const NEXT = {
     pending: ['confirmed', 'Confirm'],
-    confirmed: ['in_progress', 'Start wash'],
+    confirmed: ['in_progress', 'Start job'],
     in_progress: ['completed', 'Complete'],
   };
-  const ACTION_LABEL = { pending: 'Back to pending', confirmed: 'Confirm', in_progress: 'Start wash', completed: 'Complete', cancelled: 'Cancel booking', no_show: 'Mark no-show' };
+  const ACTION_LABEL = { pending: 'Back to pending', confirmed: 'Confirm', in_progress: 'Start job', completed: 'Complete', cancelled: 'Cancel booking', no_show: 'Mark no-show' };
 
   const setPage = (html) => (main.innerHTML = html);
   const pageHead = (title, sub, actions = '') => `<div class="page-head"><div><h1>${esc(title)}</h1>${sub ? `<p>${sub}</p>` : ''}</div><div class="btn-row">${actions}</div></div>`;
@@ -46,6 +47,8 @@
           <dl class="kv">
             <dt>Booking</dt><dd class="mono">${esc(b.code)}</dd>
             <dt>Scheduled</dt><dd>${esc(fmtDateTime(b.scheduled_at))}</dd>
+            <dt>Work time</dt><dd>${esc(UI.fmtDuration(b.duration_min))}</dd>
+            ${b.ready_at && ['pending', 'confirmed', 'in_progress'].includes(b.status) ? `<dt>Ready by</dt><dd>${esc(fmtDateTime(b.ready_at))}</dd>` : ''}
             <dt>Vehicle</dt><dd><a href="#/vehicles/${b.vehicle_id}" data-close>${plate(b.plate)}</a> ${esc(vehicleName(b))}${b.color ? ` · ${esc(b.color)}` : ''}</dd>
             <dt>Customer</dt><dd>${b.customer_id ? `<a href="#/customers/${b.customer_id}" data-close>${esc(b.customer_name)}</a><br><small>${esc(b.customer_phone || b.customer_email || '')}</small>` : '<span class="muted">Walk-in (no account)</span>'}</dd>
             ${b.started_at ? `<dt>Started</dt><dd>${esc(fmtDateTime(b.started_at))}</dd>` : ''}
@@ -53,7 +56,7 @@
             ${b.points_earned ? `<dt>Points earned</dt><dd>${b.points_earned}</dd>` : ''}
             ${b.rating ? `<dt>Rating</dt><dd>${stars(b.rating)}${b.feedback ? `<br><small>“${esc(b.feedback)}”</small>` : ''}</dd>` : ''}
           </dl>
-          <h3 style="margin-top:16px">Services</h3>
+          <h3 style="margin-top:16px">Services ${b.service_category ? UI.catBadge(b.service_category) : ''}</h3>
           ${UI.priceLines(b)}
           ${b.customer_notes ? `<div class="note" style="margin-top:12px"><div class="meta">Customer note</div>${esc(b.customer_notes)}</div>` : ''}
           <h3 style="margin-top:16px">Activity</h3>
@@ -141,7 +144,7 @@
     if (!w) return toast('Allow pop-ups to print receipts', 'error');
     w.document.write(`<!doctype html><html><head><title>Receipt ${esc(b.code)}</title><link rel="stylesheet" href="/css/style.css">
       <style>body{background:#fff;color:#000;padding:24px;font-size:14px}.price-lines td{color:#000}</style></head><body>
-      <h2 style="margin:0">${esc(s.business_name)}</h2><div class="muted">${esc(s.address || '')} ${esc(s.phone || '')}</div><hr>
+      <h2 style="margin:0">${esc(s.business_name)}</h2><div class="muted">${esc(s.tagline || '')}</div><div class="muted">${esc(s.address || '')} ${esc(s.phone || '')}</div><hr>
       <dl class="kv"><dt>Receipt</dt><dd>${esc(b.code)}</dd><dt>Date</dt><dd>${esc(fmtDateTime(b.completed_at || b.scheduled_at))}</dd>
       <dt>Vehicle</dt><dd>${esc(b.plate)} · ${esc(vehicleName(b))}</dd>${b.customer_name ? `<dt>Customer</dt><dd>${esc(b.customer_name)}</dd>` : ''}
       <dt>Payment</dt><dd>${esc(cap(b.payment_status))}${b.payment_method ? ` (${esc(cap(b.payment_method))})` : ''}</dd></dl><hr>
@@ -169,10 +172,17 @@
              ${customer ? `<div class="alert info">Customer: ${esc(customer.name)}</div>` : `<div class="field"><label>Customer account <small class="muted" style="display:inline">(optional)</small></label><select name="customer_id"><option value="">— Walk-in / no account —</option>${customers.map((c) => `<option value="${c.id}">${esc(c.name)} · ${esc(c.phone || c.email)}</option>`).join('')}</select></div>`}`
       }
       <h3>Service</h3>
-      <div class="field"><label>Package *</label><select name="service_id" required>${packages.map((s) => `<option value="${s.id}">${esc(s.name)} — ${money(s.price)} (${s.duration_min} min)</option>`).join('')}</select></div>
+      <div class="field"><label>Package *</label><select name="service_id" required>${UI.byCategory(packages)
+        .map(
+          ([cat, list]) =>
+            `<optgroup label="${esc(UI.CATEGORY[cat] || cat)}">${list
+              .map((s) => `<option value="${s.id}">${esc(s.name)} — ${money(s.price)} · ${esc(UI.fmtDuration(s.duration_min))}${s.warranty_months ? ` · warranty ${esc(UI.fmtMonths(s.warranty_months))}` : ''}</option>`)
+              .join('')}</optgroup>`,
+        )
+        .join('')}</select></div>
       <div class="field"><label>Extras</label><div class="grid grid-2" style="gap:6px">${addons.map((a) => `<label class="check"><input type="checkbox" name="addon_ids" value="${a.id}" data-array> ${esc(a.name)} <span class="muted">${money(a.price)}</span></label>`).join('')}</div></div>
       <h3>When &amp; who</h3>
-      <label class="check" style="margin-bottom:10px"><input type="checkbox" name="start_now" checked> Start the wash now (car is here)</label>
+      <label class="check" style="margin-bottom:10px"><input type="checkbox" name="start_now" checked> Start the job now (car is here)</label>
       <div class="field" data-when style="display:none"><label>Scheduled for</label><input type="datetime-local" name="scheduled_at" value="${now.toISOString().slice(0, 16)}"></div>
       <div class="form-row form-row-3">
         <div class="field"><label>Staff</label><select name="staff_id">${staffOptions(null)}</select></div>
@@ -221,12 +231,24 @@
   async function dashboard() {
     const s = await api('GET', '/api/admin/stats');
     const t = s.today;
+    const followupRow = (f) => {
+      const what =
+        f.reason === 'maintenance'
+          ? `${f.maintenance_status === 'overdue' ? 'Maintenance overdue since' : 'Maintenance due'} ${esc(fmtDate(f.due_at))} <span class="badge ${f.maintenance_status}">${f.maintenance_status === 'overdue' ? 'Overdue' : 'Due soon'}</span>`
+          : `Warranty ends ${esc(fmtDate(f.due_at))} <span class="badge expiring">Expiring</span>`;
+      const contact = f.owner_id ? `${esc(f.owner_name)}${f.owner_phone ? ` · <a href="tel:${esc(f.owner_phone)}">${esc(f.owner_phone)}</a>` : f.owner_email ? ` · ${esc(f.owner_email)}` : ''}` : 'Walk-in (no account)';
+      return `<div class="followup">
+        <a href="#/vehicles/${f.vehicle_id}">${plate(f.plate)}</a>
+        <div class="what"><b>${esc(f.name)}</b> — ${what}<small class="muted">${esc(vehicleName(f))} · ${contact}</small></div>
+        <div>${f.active_bookings ? '<span class="badge confirmed">Booked</span>' : `<button class="btn btn-sm btn-primary" data-followup="${f.id}">Book visit</button>`}</div>
+      </div>`;
+    };
     const queueRow = (b) => {
       const next = NEXT[b.status];
       return `<tr class="clickable" data-booking="${b.id}">
-        <td><b>${esc(fmtTime(b.scheduled_at))}</b>${b.scheduled_at.slice(0, 10) !== UI.localDate() ? `<br><small>${esc(fmtShortDate(b.scheduled_at))}</small>` : ''}</td>
+        <td style="white-space:nowrap"><b>${esc(fmtTime(b.scheduled_at))}</b>${b.scheduled_at.slice(0, 10) !== UI.localDate() ? `<br><small>${esc(fmtShortDate(b.scheduled_at))}</small>` : ''}</td>
         <td>${vehicleLink(b)}<div class="muted" style="font-size:.8rem">${esc(vehicleName(b))}${b.color ? ` · ${esc(b.color)}` : ''}</div></td>
-        <td>${esc(b.service_name)}${addonsText(b)}</td>
+        <td>${esc(b.service_name)}${addonsText(b)}${UI.readyText(b) ? `<div>${UI.readyText(b)}</div>` : ''}</td>
         <td>${esc(b.customer_name || 'Walk-in')}</td>
         <td>${esc(b.staff_name || '—')}${b.bay ? `<br><small>Bay ${b.bay}</small>` : ''}</td>
         <td>${statusBadge(b.status)}</td>
@@ -237,7 +259,7 @@
     setPage(`
       ${pageHead('Dashboard', esc(fmtDate(UI.localDate() + ' 12:00')), '<button class="btn btn-primary" data-new>+ New booking / walk-in</button>')}
       <div class="grid grid-4">
-        <div class="card stat"><span class="label">Today's bookings</span><span class="value">${t.total || 0}</span><span class="sub">${t.waiting || 0} waiting · ${t.in_progress || 0} washing · ${t.completed || 0} done</span></div>
+        <div class="card stat"><span class="label">Today's bookings</span><span class="value">${t.total || 0}</span><span class="sub">${t.waiting || 0} waiting · ${t.in_progress || 0} in progress · ${t.completed || 0} done</span></div>
         <div class="card stat"><span class="label">Revenue today</span><span class="value">${money(t.revenue)}</span><span class="sub">This month: ${money(s.month.revenue)}</span></div>
         <div class="card stat"><span class="label">Unpaid completed</span><span class="value">${s.unpaid.count}</span><span class="sub">${money(s.unpaid.amount)} outstanding</span></div>
         <div class="card stat"><span class="label">Customer rating</span><span class="value">${s.totals.avg_rating ? `${s.totals.avg_rating} ★` : '—'}</span><span class="sub">${s.totals.customers} customers · ${s.totals.vehicles} vehicles</span></div>
@@ -248,15 +270,25 @@
         <div class="table-wrap"><table><thead><tr><th>Time</th><th>Vehicle</th><th>Service</th><th>Customer</th><th>Staff</th><th>Status</th><th class="num">Total</th><th></th></tr></thead>
         <tbody>${s.queue.length ? s.queue.map(queueRow).join('') : '<tr><td colspan="8" class="empty">No cars scheduled for today yet.</td></tr>'}</tbody></table></div>
       </div>
+      <div class="card" style="margin-top:16px">
+        <div class="card-head"><h2>Follow-ups: coating &amp; PPF care</h2><span class="muted">${s.followups.length ? `${s.followups.length} to contact` : ''}</span></div>
+        ${s.followups.length ? s.followups.slice(0, 10).map(followupRow).join('') : '<div class="empty">No maintenance visits due and no warranties expiring in the next 30 days.</div>'}
+      </div>
       <div class="grid grid-3" style="margin-top:16px">
         <div class="card span-2"><div class="card-head"><h2>Revenue — last 14 days</h2></div>
-          ${UI.barChart(s.revenue_14d.map((d) => ({ label: fmtShortDate(d.day).replace(' ', ' '), value: d.revenue, title: `${fmtDate(d.day)}: ${money(d.revenue)} · ${d.washes} washes` })), { format: money })}</div>
+          ${UI.barChart(s.revenue_14d.map((d) => ({ label: fmtShortDate(d.day).replace(' ', ' '), value: d.revenue, title: `${fmtDate(d.day)}: ${money(d.revenue)} · ${d.washes} jobs` })), { format: money })}</div>
         <div class="card"><div class="card-head"><h2>Top packages (30 days)</h2></div>${UI.hbars(s.top_services.map((x) => ({ name: x.name, value: x.count, display: `${x.count}×` })))}</div>
       </div>
       <div class="card" style="margin-top:16px"><div class="card-head"><h2>Latest feedback</h2></div>
         ${s.recent_feedback.length ? s.recent_feedback.map((f) => `<div class="note"><div class="meta"><span>${stars(f.rating)} · ${plate(f.plate)} · ${esc(f.customer_name || 'Walk-in')}</span><span>${esc(timeAgo(f.completed_at))}</span></div>${f.feedback ? esc(f.feedback) : '<span class="muted">No comment</span>'}</div>`).join('') : '<div class="empty">No ratings yet.</div>'}
       </div>`);
     main.querySelector('[data-new]').addEventListener('click', () => newBooking({ onDone: dashboard }));
+    main.querySelectorAll('[data-followup]').forEach((btn) =>
+      btn.addEventListener('click', () => {
+        const f = s.followups.find((x) => x.id === Number(btn.dataset.followup));
+        newBooking({ vehicle: { id: f.vehicle_id, plate: f.plate, make: f.make, model: f.model, year: f.year, owner_name: f.owner_name }, onDone: dashboard });
+      }),
+    );
     main.querySelectorAll('[data-booking]').forEach((tr) => tr.addEventListener('click', (e) => !e.target.closest('button, a') && openBooking(tr.dataset.booking, dashboard)));
     main.querySelectorAll('[data-quick]').forEach((btn) =>
       btn.addEventListener('click', async () => {
@@ -328,7 +360,7 @@
           <td>${esc(fmtDate(b.scheduled_at))}<br><small>${esc(fmtTime(b.scheduled_at))}</small></td>
           <td>${vehicleLink(b)}<div class="muted" style="font-size:.8rem">${esc(vehicleName(b))}</div></td>
           <td>${b.customer_id ? `<a href="#/customers/${b.customer_id}">${esc(b.customer_name)}</a>` : '<span class="muted">Walk-in</span>'}</td>
-          <td>${esc(b.service_name)}${addonsText(b)}</td>
+          <td>${esc(b.service_name)}${addonsText(b)}${UI.readyText(b) ? `<div>${UI.readyText(b)}</div>` : ''}</td>
           <td>${esc(b.staff_name || '—')}</td>
           <td>${statusBadge(b.status)}${b.rating ? `<br>${stars(b.rating)}` : ''}</td>
           <td>${payBadge(b.payment_status)}</td>
@@ -345,7 +377,7 @@
   // =====================================================================
   async function vehicles(_p, query) {
     setPage(`
-      ${pageHead('Vehicles & history', 'Every car that has visited, with its complete wash history.', '<button class="btn" data-add>+ Add vehicle</button><button class="btn btn-primary" data-new>+ Walk-in</button>')}
+      ${pageHead('Vehicles & history', 'Every car that has visited, with its complete service history and coating / PPF warranties.', '<button class="btn" data-add>+ Add vehicle</button><button class="btn btn-primary" data-new>+ Walk-in</button>')}
       <div class="card">
         <form class="filters" data-search><input type="search" name="q" placeholder="Search by plate, make, model, colour or owner…" value="${esc(query.q || '')}"><button class="btn">Search</button></form>
         <div data-results><div class="loading">Loading…</div></div>
@@ -360,14 +392,14 @@
     main.querySelector('[data-add]').addEventListener('click', () => editVehicle(null, (v) => (location.hash = `#/vehicles/${v.id}`)));
     const { vehicles: list } = await api('GET', '/api/admin/vehicles' + (query.q ? `?q=${encodeURIComponent(query.q)}` : ''));
     main.querySelector('[data-results]').innerHTML = `
-      <div class="table-wrap"><table><thead><tr><th>Plate</th><th>Vehicle</th><th>Owner</th><th class="num">Washes</th><th class="num">Total spent</th><th>Last wash</th><th></th></tr></thead><tbody>
+      <div class="table-wrap"><table><thead><tr><th>Plate</th><th>Vehicle</th><th>Owner</th><th class="num">Visits</th><th class="num">Total spent</th><th>Last visit</th><th></th></tr></thead><tbody>
       ${
         list.length
           ? list
               .map(
                 (v) => `<tr class="clickable" data-vehicle="${v.id}">
           <td>${plate(v.plate)}</td>
-          <td><b>${esc(vehicleName(v))}</b><div class="muted" style="font-size:.8rem">${esc(cap(v.type))}${v.color ? ` · ${esc(v.color)}` : ''}</div></td>
+          <td><b>${esc(vehicleName(v))}</b><div class="muted" style="font-size:.8rem">${esc(cap(v.type))}${v.color ? ` · ${esc(v.color)}` : ''}</div>${v.protection_categories ? `<div style="margin-top:4px" class="btn-row">${v.protection_categories.split(',').map((c) => UI.catBadge(c)).join('')}</div>` : ''}</td>
           <td>${v.owner_id ? `<a href="#/customers/${v.owner_id}">${esc(v.owner_name)}</a><div class="muted" style="font-size:.8rem">${esc(v.owner_phone || '')}</div>` : '<span class="muted">Walk-in</span>'}</td>
           <td class="num">${v.washes}</td>
           <td class="num">${money(v.total_spent)}</td>
@@ -401,7 +433,7 @@
   // =====================================================================
   async function vehicleDetail({ id }, query) {
     const h = await api('GET', `/api/admin/vehicles/${id}`);
-    const { vehicle: v, stats: st, bookings: list, notes } = h;
+    const { vehicle: v, stats: st, bookings: list, notes, protections } = h;
     const filter = query.show || 'all';
     const shown = list.filter((b) => filter === 'all' || (filter === 'completed' ? b.status === 'completed' : filter === 'other' ? b.status !== 'completed' : true));
     const statTile = (label, value, sub = '') => `<div class="card stat"><span class="label">${label}</span><span class="value" style="font-size:1.3rem">${value}</span>${sub ? `<span class="sub">${sub}</span>` : ''}</div>`;
@@ -424,7 +456,7 @@
               <dt>Mileage</dt><dd>${b.mileage ? esc(b.mileage.toLocaleString()) : '—'}</dd>
               <dt>Source</dt><dd>${b.source === 'walk_in' ? 'Walk-in' : 'Online'}</dd>
               <dt>Payment</dt><dd>${payBadge(b.payment_status)} ${esc(cap(b.payment_method || ''))}</dd>
-              ${b.started_at && b.completed_at ? `<dt>Wash time</dt><dd>${Math.max(1, Math.round((new Date(b.completed_at.replace(' ', 'T')) - new Date(b.started_at.replace(' ', 'T'))) / 60000))} min</dd>` : ''}
+              ${b.started_at && b.completed_at ? `<dt>Time in bay</dt><dd>${Math.max(1, Math.round((new Date(b.completed_at.replace(' ', 'T')) - new Date(b.started_at.replace(' ', 'T'))) / 60000))} min</dd>` : ''}
             </dl>
           </div>
           <div>
@@ -456,8 +488,8 @@
       </div>
       ${st.next_booking ? `<div class="alert info" style="margin-top:16px">Active booking: <b>${esc(st.next_booking.service_name)}</b> on ${esc(fmtDateTime(st.next_booking.scheduled_at))} — ${statusBadge(st.next_booking.status)} <a href="#" data-booking="${st.next_booking.id}">Open →</a></div>` : ''}
       <div class="grid grid-4" style="margin-top:16px">
-        ${statTile('Completed washes', st.completed_washes, `${st.total_bookings} bookings total${st.cancelled ? ` · ${st.cancelled} cancelled` : ''}${st.no_shows ? ` · ${st.no_shows} no-show` : ''}`)}
-        ${statTile('Total spent', money(st.total_spent), `avg ${money(st.average_ticket)} per wash`)}
+        ${statTile('Completed visits', st.completed_washes, `${st.total_bookings} bookings total${st.cancelled ? ` · ${st.cancelled} cancelled` : ''}${st.no_shows ? ` · ${st.no_shows} no-show` : ''}`)}
+        ${statTile('Total spent', money(st.total_spent), `avg ${money(st.average_ticket)} per visit`)}
         ${statTile('Last visit', st.last_visit ? esc(timeAgo(st.last_visit)) : 'Never', st.last_visit ? esc(fmtDate(st.last_visit)) : '')}
         ${statTile('Visit frequency', st.avg_days_between ? `every ${st.avg_days_between} days` : '—', st.first_visit ? `customer since ${esc(fmtShortDate(st.first_visit))} ${esc(st.first_visit.slice(0, 4))}` : '')}
         ${statTile('Favourite package', esc(st.favourite_service || '—'))}
@@ -465,18 +497,26 @@
         ${statTile('Last mileage', st.last_mileage ? esc(st.last_mileage.toLocaleString()) : '—')}
         ${statTile('Notes on file', notes.length, notes.filter((n) => n.kind === 'damage').length ? `${notes.filter((n) => n.kind === 'damage').length} damage report(s)` : '')}
       </div>
+      <div class="card" style="margin-top:16px">
+        <div class="card-head"><h2>Protection &amp; warranty</h2><button class="btn btn-sm no-print" data-add-protection>+ Add coating / PPF record</button></div>
+        ${
+          protections.length
+            ? UI.protectionCards(protections, { admin: true })
+            : '<div class="muted">No ceramic coating or PPF on record. A record is created automatically when a coating or PPF job is completed — use “Add” for work done before.</div>'
+        }
+      </div>
       <div class="grid grid-3" style="margin-top:16px">
         <div class="card span-2">
-          <div class="card-head"><h2>Wash history</h2>
+          <div class="card-head"><h2>Service history</h2>
             <div class="btn-row no-print">${[['all', 'All'], ['completed', 'Completed'], ['other', 'Cancelled / upcoming']].map(([k, l]) => `<a class="btn btn-sm ${filter === k ? 'btn-primary' : ''}" href="#/vehicles/${v.id}?show=${k}">${l}</a>`).join('')}</div>
           </div>
-          ${shown.length ? shown.map(historyItem).join('') : '<div class="empty">No washes recorded for this vehicle yet.</div>'}
+          ${shown.length ? shown.map(historyItem).join('') : '<div class="empty">No services recorded for this vehicle yet.</div>'}
         </div>
         <div class="card">
           <div class="card-head"><h2>Vehicle notes</h2></div>
           <form data-note class="no-print">
             <div class="field"><select name="kind"><option value="general">General</option><option value="damage">Damage / pre-existing</option><option value="preference">Customer preference</option><option value="warning">Warning</option></select></div>
-            <div class="field"><textarea name="note" placeholder="e.g. Dent on rear left door before wash" required></textarea></div>
+            <div class="field"><textarea name="note" placeholder="e.g. Dent on rear left door (pre-existing)" required></textarea></div>
             <button class="btn btn-primary btn-sm">Add note</button>
           </form>
           <div style="margin-top:14px">${
@@ -501,6 +541,19 @@
     );
     main.querySelector('[data-new]').addEventListener('click', () => newBooking({ vehicle: v, onDone: reload }));
     main.querySelector('[data-edit]').addEventListener('click', () => editVehicle(v, reload));
+    main.querySelector('[data-add-protection]').addEventListener('click', () => protectionForm(v, null, reload));
+    main.querySelectorAll('[data-edit-protection]').forEach((b) =>
+      b.addEventListener('click', () => protectionForm(v, protections.find((p) => p.id === Number(b.dataset.editProtection)), reload)),
+    );
+    main.querySelectorAll('[data-del-protection]').forEach((b) =>
+      b.addEventListener('click', async () => {
+        const p = protections.find((x) => x.id === Number(b.dataset.delProtection));
+        if (!(await confirmDialog(`Delete the "${p.name}" record from ${v.plate}? Its warranty and maintenance reminders will be removed.`, { okLabel: 'Delete', danger: true }))) return;
+        await api('DELETE', `/api/admin/protections/${p.id}`);
+        toast('Record deleted', 'success');
+        reload();
+      }),
+    );
     main.querySelector('[data-note]').addEventListener('submit', async (e) => {
       e.preventDefault();
       try {
@@ -518,6 +571,48 @@
         reload();
       }),
     );
+  }
+
+  /** Add or edit a ceramic coating / PPF record on a vehicle. */
+  function protectionForm(v, p, onSaved) {
+    const templates = cache.services.filter((x) => x.warranty_months || x.maintenance_months);
+    modal({
+      title: p ? `Edit ${p.name}` : `Add coating / PPF record — ${v.plate}`,
+      body: `
+        ${
+          p
+            ? ''
+            : `<div class="field"><label>Fill in from a service</label><select data-template><option value="">— Choose (optional) —</option>${templates
+                .map((t) => `<option value="${t.id}">${esc(t.name)}</option>`)
+                .join('')}</select></div>`
+        }
+        <div class="form-row">
+          <div class="field"><label>Name *</label><input name="name" required value="${esc(p?.name)}" placeholder="e.g. Ceramic Coating – 3 Years"></div>
+          <div class="field"><label>Type</label><select name="category">${UI.CATEGORY_ORDER.map((c) => `<option value="${c}" ${(p?.category || 'ceramic') === c ? 'selected' : ''}>${esc(UI.CATEGORY[c])}</option>`).join('')}</select></div>
+        </div>
+        <div class="form-row form-row-3">
+          <div class="field"><label>Applied on</label><input type="date" name="applied_at" required value="${esc(p?.applied_at || UI.localDate())}"></div>
+          <div class="field"><label>Warranty (months)</label><input type="number" min="0" max="600" name="warranty_months" value="${esc(p?.warranty_months)}" placeholder="e.g. 36"></div>
+          <div class="field"><label>Maintenance every (months)</label><input type="number" min="0" max="600" name="maintenance_months" value="${esc(p?.maintenance_months)}" placeholder="e.g. 6"></div>
+        </div>
+        <div class="field"><label>Details <small class="muted" style="display:inline">(shown to the customer)</small></label><textarea name="details" placeholder="Product, number of layers, panels covered, warranty card no.…">${esc(p?.details)}</textarea></div>`,
+      onOpen: (el) => {
+        el.querySelector('[data-template]')?.addEventListener('change', (e) => {
+          const t = templates.find((x) => x.id === Number(e.target.value));
+          if (!t) return;
+          el.querySelector('[name=name]').value = t.name;
+          el.querySelector('[name=category]').value = t.category;
+          el.querySelector('[name=warranty_months]').value = t.warranty_months || '';
+          el.querySelector('[name=maintenance_months]').value = t.maintenance_months || '';
+        });
+      },
+      onSubmit: async (d) => {
+        if (p) await api('PATCH', `/api/admin/protections/${p.id}`, d);
+        else await api('POST', `/api/admin/vehicles/${v.id}/protections`, d);
+        toast('Saved', 'success');
+        await onSaved();
+      },
+    });
   }
 
   // =====================================================================
@@ -552,7 +647,7 @@
     );
     const { customers: list } = await api('GET', '/api/admin/customers' + (query.q ? `?q=${encodeURIComponent(query.q)}` : ''));
     main.querySelector('[data-results]').innerHTML = `
-      <div class="table-wrap"><table><thead><tr><th>Name</th><th>Contact</th><th class="num">Vehicles</th><th class="num">Washes</th><th class="num">Spent</th><th class="num">Points</th><th>Last visit</th><th>Status</th></tr></thead><tbody>
+      <div class="table-wrap"><table><thead><tr><th>Name</th><th>Contact</th><th class="num">Vehicles</th><th class="num">Visits</th><th class="num">Spent</th><th class="num">Points</th><th>Last visit</th><th>Status</th></tr></thead><tbody>
       ${
         list.length
           ? list
@@ -585,17 +680,17 @@
           <button class="btn ${c.active ? 'btn-danger' : ''}" data-toggle>${c.active ? 'Disable account' : 'Enable account'}</button>
         </div></div></div>
       <div class="grid grid-4" style="margin-top:16px">
-        <div class="card stat"><span class="label">Completed washes</span><span class="value">${stats.washes}</span></div>
+        <div class="card stat"><span class="label">Completed visits</span><span class="value">${stats.washes}</span></div>
         <div class="card stat"><span class="label">Total spent</span><span class="value">${money(stats.total_spent)}</span></div>
         <div class="card stat"><span class="label">Loyalty points</span><span class="value">${c.loyalty_points}</span></div>
         <div class="card stat"><span class="label">Cancellations / no-shows</span><span class="value">${stats.cancelled} / ${stats.no_shows}</span></div>
       </div>
       <div class="card" style="margin-top:16px"><div class="card-head"><h2>Vehicles</h2></div>
-        <div class="grid grid-cards">${vs.length ? vs.map((v) => `<a class="card vehicle-card" href="#/vehicles/${v.id}" style="color:inherit;text-decoration:none"><div class="top"><div><div class="name">${esc(vehicleName(v))}</div><div class="muted">${esc(cap(v.type))}${v.color ? ` · ${esc(v.color)}` : ''}</div></div>${plate(v.plate)}</div><div class="muted">${v.washes} wash${v.washes === 1 ? '' : 'es'} · view history →</div></a>`).join('') : '<div class="muted">No vehicles.</div>'}</div>
+        <div class="grid grid-cards">${vs.length ? vs.map((v) => `<a class="card vehicle-card" href="#/vehicles/${v.id}" style="color:inherit;text-decoration:none"><div class="top"><div><div class="name">${esc(vehicleName(v))}</div><div class="muted">${esc(cap(v.type))}${v.color ? ` · ${esc(v.color)}` : ''}</div></div>${plate(v.plate)}</div><div class="muted">${v.washes} visit${v.washes === 1 ? '' : 's'} · view history →</div></a>`).join('') : '<div class="muted">No vehicles.</div>'}</div>
       </div>
       <div class="card"><div class="card-head"><h2>Bookings</h2></div>
         <div class="table-wrap"><table><thead><tr><th>Date</th><th>Vehicle</th><th>Service</th><th>Staff</th><th>Status</th><th>Payment</th><th class="num">Total</th></tr></thead><tbody>
-        ${bs.length ? bs.map((b) => `<tr class="clickable" data-booking="${b.id}"><td>${esc(fmtDateTime(b.scheduled_at))}</td><td>${vehicleLink(b)}</td><td>${esc(b.service_name)}${addonsText(b)}</td><td>${esc(b.staff_name || '—')}</td><td>${statusBadge(b.status)} ${stars(b.rating)}</td><td>${payBadge(b.payment_status)}</td><td class="num">${money(b.total)}</td></tr>`).join('') : '<tr><td colspan="7" class="empty">No bookings yet.</td></tr>'}
+        ${bs.length ? bs.map((b) => `<tr class="clickable" data-booking="${b.id}"><td>${esc(fmtDateTime(b.scheduled_at))}</td><td>${vehicleLink(b)}</td><td>${esc(b.service_name)}${addonsText(b)}${UI.readyText(b) ? `<div>${UI.readyText(b)}</div>` : ''}</td><td>${esc(b.staff_name || '—')}</td><td>${statusBadge(b.status)} ${stars(b.rating)}</td><td>${payBadge(b.payment_status)}</td><td class="num">${money(b.total)}</td></tr>`).join('') : '<tr><td colspan="7" class="empty">No bookings yet.</td></tr>'}
         </tbody></table></div></div>`);
     main.querySelectorAll('[data-booking]').forEach((tr) => tr.addEventListener('click', (e) => !e.target.closest('a') && openBooking(tr.dataset.booking, reload)));
     main.querySelector('[data-new]').addEventListener('click', () => newBooking({ customer: c, onDone: reload }));
@@ -636,27 +731,53 @@
   // =====================================================================
   async function services() {
     await refreshCatalog();
+    const row = (s) => `<tr>
+      <td><b>${esc(s.name)}</b><div class="muted" style="font-size:.8rem">${esc(s.description || '')}</div></td>
+      <td class="num">${money(s.price)}</td>
+      <td class="num">${esc(UI.fmtDuration(s.duration_min))}</td>
+      <td>${s.warranty_months ? esc(UI.fmtMonths(s.warranty_months)) : '<span class="muted">—</span>'}</td>
+      <td>${s.maintenance_months ? `every ${esc(UI.fmtMonths(s.maintenance_months))}` : '<span class="muted">—</span>'}</td>
+      <td class="num">${s.times_sold}</td>
+      <td>${s.active ? '<span class="badge active">Active</span>' : '<span class="badge inactive">Hidden</span>'}</td>
+      <td class="num"><div class="btn-row" style="justify-content:flex-end"><button class="btn btn-sm" data-edit="${s.id}">Edit</button><button class="btn btn-sm btn-danger" data-del="${s.id}">Delete</button></div></td></tr>`;
+    const head = '<thead><tr><th>Name</th><th class="num">Price</th><th class="num">Work time</th><th>Warranty</th><th>Maintenance</th><th class="num">Sold</th><th>Status</th><th></th></tr></thead>';
     const table = (kind) => {
-      const rows = cache.services.filter((s) => s.kind === kind);
-      return `<div class="table-wrap"><table><thead><tr><th>Name</th><th class="num">Price</th><th class="num">Duration</th><th class="num">Sold</th><th>Status</th><th></th></tr></thead><tbody>
-        ${rows.length ? rows.map((s) => `<tr><td><b>${esc(s.name)}</b><div class="muted" style="font-size:.8rem">${esc(s.description || '')}</div></td><td class="num">${money(s.price)}</td><td class="num">${s.duration_min} min</td><td class="num">${s.times_sold}</td><td>${s.active ? '<span class="badge active">Active</span>' : '<span class="badge inactive">Hidden</span>'}</td><td class="num"><div class="btn-row" style="justify-content:flex-end"><button class="btn btn-sm" data-edit="${s.id}">Edit</button><button class="btn btn-sm btn-danger" data-del="${s.id}">Delete</button></div></td></tr>`).join('') : '<tr><td colspan="6" class="empty">None yet.</td></tr>'}
-      </tbody></table></div>`;
+      const groups = UI.byCategory(cache.services.filter((s) => s.kind === kind));
+      if (!groups.length) return '<div class="empty">None yet.</div>';
+      return `<div class="table-wrap"><table>${head}<tbody>${groups
+        .map(([cat, list]) => `<tr><td colspan="8" style="background:var(--surface-2)"><b>${esc(UI.CATEGORY[cat] || cat)}</b></td></tr>${list.map(row).join('')}`)
+        .join('')}</tbody></table></div>`;
     };
     setPage(`
-      ${pageHead('Services & pricing', `Large vehicles (SUV, pickup, van) get a ${esc(UI.state.settings.large_vehicle_surcharge)}% surcharge — change it in Settings.`, '<button class="btn btn-primary" data-add>+ Add service</button>')}
-      <div class="card"><div class="card-head"><h2>Wash packages</h2></div>${table('package')}</div>
+      ${pageHead('Services & pricing', `Large vehicles (SUV, pickup, van) get a ${esc(UI.state.settings.large_vehicle_surcharge)}% surcharge — change it in Settings. Services with a warranty or maintenance interval create a protection record on the car when the job is completed.`, '<button class="btn btn-primary" data-add>+ Add service</button>')}
+      <div class="card"><div class="card-head"><h2>Service packages</h2></div>${table('package')}</div>
       <div class="card"><div class="card-head"><h2>Add-on extras</h2></div>${table('addon')}</div>`);
     const form = (s = {}) =>
       modal({
         title: s.id ? `Edit ${s.name}` : 'Add service',
-        body: `<div class="field"><label>Name *</label><input name="name" value="${esc(s.name)}" required></div>
+        wide: true,
+        body: `<div class="form-row">
+            <div class="field"><label>Name *</label><input name="name" value="${esc(s.name)}" required></div>
+            <div class="field"><label>Service line</label><select name="category">${UI.CATEGORY_ORDER.map((c) => `<option value="${c}" ${(s.category || 'wash') === c ? 'selected' : ''}>${esc(UI.CATEGORY[c])}</option>`).join('')}</select></div>
+          </div>
           <div class="field"><label>Description</label><textarea name="description">${esc(s.description)}</textarea></div>
           <div class="form-row form-row-3">
-            <div class="field"><label>Type</label><select name="kind"><option value="package" ${s.kind !== 'addon' ? 'selected' : ''}>Wash package</option><option value="addon" ${s.kind === 'addon' ? 'selected' : ''}>Add-on extra</option></select></div>
+            <div class="field"><label>Type</label><select name="kind"><option value="package" ${s.kind !== 'addon' ? 'selected' : ''}>Service package</option><option value="addon" ${s.kind === 'addon' ? 'selected' : ''}>Add-on extra</option></select></div>
             <div class="field"><label>Price (${esc(UI.state.settings.currency)}) *</label><input name="price" type="number" min="0" step="0.01" value="${esc(s.price)}" required></div>
-            <div class="field"><label>Duration (min) *</label><input name="duration_min" type="number" min="1" value="${esc(s.duration_min || 30)}" required></div>
+            <div class="field"><label>Work time (minutes) *</label><input name="duration_min" type="number" min="1" value="${esc(s.duration_min || 30)}" required><small class="muted" data-duration-hint></small></div>
+          </div>
+          <div class="form-row">
+            <div class="field"><label>Warranty (months)</label><input name="warranty_months" type="number" min="0" max="600" value="${esc(s.warranty_months)}" placeholder="e.g. 36 for a 3-year coating"><small class="muted">Leave empty if there is no warranty.</small></div>
+            <div class="field"><label>Maintenance visit every (months)</label><input name="maintenance_months" type="number" min="0" max="600" value="${esc(s.maintenance_months)}" placeholder="e.g. 6"><small class="muted">Used for follow-up reminders.</small></div>
           </div>
           <label class="check"><input type="checkbox" name="active" ${s.active === 0 ? '' : 'checked'}> Available for booking</label>`,
+        onOpen: (el) => {
+          const input = el.querySelector('[name=duration_min]');
+          const hint = el.querySelector('[data-duration-hint]');
+          const show = () => (hint.textContent = Number(input.value) >= 60 ? `= ${UI.fmtDuration(Number(input.value))}` : '');
+          input.addEventListener('input', show);
+          show();
+        },
         onSubmit: async (d) => {
           if (s.id) await api('PATCH', `/api/admin/services/${s.id}`, d);
           else await api('POST', '/api/admin/services', d);
@@ -683,14 +804,14 @@
   async function staff() {
     await refreshCatalog();
     setPage(`
-      ${pageHead('Staff', 'Washers and detailers you can assign to bookings.', '<button class="btn btn-primary" data-add>+ Add staff member</button>')}
+      ${pageHead('Staff', 'Detailers and installers you can assign to jobs.', '<button class="btn btn-primary" data-add>+ Add staff member</button>')}
       <div class="card"><div class="table-wrap"><table><thead><tr><th>Name</th><th>Position</th><th>Phone</th><th class="num">Jobs today</th><th class="num">Jobs total</th><th class="num">Avg rating</th><th>Status</th><th></th></tr></thead><tbody>
       ${
         cache.staff.length
           ? cache.staff
               .map(
                 (s) => `<tr><td><b>${esc(s.name)}</b></td><td>${esc(s.position || '—')}</td><td>${esc(s.phone || '—')}</td><td class="num">${s.jobs_today}</td><td class="num">${s.jobs_completed}</td><td class="num">${s.avg_rating ? `${s.avg_rating} ★` : '—'}</td>
-          <td>${!s.active ? '<span class="badge inactive">Inactive</span>' : s.busy ? '<span class="badge in_progress">Washing</span>' : '<span class="badge active">Available</span>'}</td>
+          <td>${!s.active ? '<span class="badge inactive">Inactive</span>' : s.busy ? '<span class="badge in_progress">On a job</span>' : '<span class="badge active">Available</span>'}</td>
           <td class="num"><div class="btn-row" style="justify-content:flex-end"><button class="btn btn-sm" data-edit="${s.id}">Edit</button><button class="btn btn-sm btn-danger" data-del="${s.id}">Remove</button></div></td></tr>`,
               )
               .join('')
@@ -700,7 +821,7 @@
       modal({
         title: s.id ? `Edit ${s.name}` : 'Add staff member',
         body: `<div class="field"><label>Name *</label><input name="name" value="${esc(s.name)}" required></div>
-          <div class="form-row"><div class="field"><label>Position</label><input name="position" value="${esc(s.position)}" placeholder="Washer, Detailer…"></div><div class="field"><label>Phone</label><input name="phone" value="${esc(s.phone)}"></div></div>
+          <div class="form-row"><div class="field"><label>Position</label><input name="position" value="${esc(s.position)}" placeholder="Detailer, PPF installer…"></div><div class="field"><label>Phone</label><input name="phone" value="${esc(s.phone)}"></div></div>
           ${s.id ? `<label class="check"><input type="checkbox" name="active" ${s.active ? 'checked' : ''}> Active</label>` : ''}`,
         onSubmit: async (d) => {
           if (s.id) await api('PATCH', `/api/admin/staff/${s.id}`, d);
@@ -750,18 +871,19 @@
       </form></div>
       <div class="grid grid-4" style="margin-top:16px">
         <div class="card stat"><span class="label">Revenue</span><span class="value">${money(s.revenue)}</span><span class="sub">Discounts ${money(s.discounts)} · tax ${money(s.tax)}</span></div>
-        <div class="card stat"><span class="label">Completed washes</span><span class="value">${s.completed || 0}</span><span class="sub">${s.unique_vehicles || 0} unique vehicles</span></div>
+        <div class="card stat"><span class="label">Completed jobs</span><span class="value">${s.completed || 0}</span><span class="sub">${s.unique_vehicles || 0} unique vehicles</span></div>
         <div class="card stat"><span class="label">Average ticket</span><span class="value">${money(s.avg_ticket)}</span><span class="sub">${s.online || 0} online · ${s.walk_ins || 0} walk-in</span></div>
         <div class="card stat"><span class="label">Cancelled / no-show</span><span class="value">${s.cancelled || 0} / ${s.no_shows || 0}</span><span class="sub">of ${s.bookings || 0} bookings · rating ${s.avg_rating ? `${s.avg_rating} ★` : '—'}</span></div>
       </div>
       <div class="card" style="margin-top:16px"><div class="card-head"><h2>Daily revenue</h2></div>
-        ${r.by_day.length ? UI.barChart(r.by_day.map((d) => ({ label: r.by_day.length > 20 ? '' : fmtShortDate(d.day), value: d.revenue, title: `${fmtDate(d.day)}: ${money(d.revenue)} · ${d.washes} washes` }))) : '<div class="empty">No completed washes in this period.</div>'}</div>
+        ${r.by_day.length ? UI.barChart(r.by_day.map((d) => ({ label: r.by_day.length > 20 ? '' : fmtShortDate(d.day), value: d.revenue, title: `${fmtDate(d.day)}: ${money(d.revenue)} · ${d.washes} jobs` }))) : '<div class="empty">No completed jobs in this period.</div>'}</div>
       <div class="grid grid-2" style="margin-top:16px">
+        <div class="card span-2"><div class="card-head"><h2>Revenue by service line</h2></div>${UI.hbars(r.by_category.map((x) => ({ name: `${UI.CATEGORY[x.category] || x.category} (${x.count})`, value: x.revenue, display: money(x.revenue) })))}</div>
         <div class="card"><div class="card-head"><h2>Packages</h2></div>${UI.hbars(r.by_service.map((x) => ({ name: `${x.name} (${x.count})`, value: x.revenue, display: money(x.revenue) })))}</div>
         <div class="card"><div class="card-head"><h2>Add-ons</h2></div>${UI.hbars(r.by_addon.map((x) => ({ name: `${x.name} (${x.count})`, value: x.revenue, display: money(x.revenue) })))}</div>
         <div class="card"><div class="card-head"><h2>Staff performance</h2></div>${simpleTable(r.by_staff, [['Staff', (x) => esc(x.name)], ['Jobs', (x) => x.count, 1], ['Revenue', (x) => money(x.revenue), 1], ['Rating', (x) => (x.avg_rating ? `${x.avg_rating} ★` : '—'), 1]])}</div>
         <div class="card"><div class="card-head"><h2>Payments</h2></div>${simpleTable(r.by_payment, [['Method', (x) => esc(cap(x.method))], ['Status', (x) => payBadge(x.status)], ['Count', (x) => x.count, 1], ['Amount', (x) => money(x.amount), 1]])}</div>
-        <div class="card"><div class="card-head"><h2>Busiest hours</h2></div>${r.by_hour.length ? UI.barChart(r.by_hour.map((h) => ({ label: `${h.hour}h`, value: h.count, title: `${h.hour}:00 — ${h.count} washes` }))) : '<div class="empty">No data.</div>'}</div>
+        <div class="card"><div class="card-head"><h2>Busiest hours</h2></div>${r.by_hour.length ? UI.barChart(r.by_hour.map((h) => ({ label: `${h.hour}h`, value: h.count, title: `${h.hour}:00 — ${h.count} jobs` }))) : '<div class="empty">No data.</div>'}</div>
         <div class="card"><div class="card-head"><h2>Vehicle types</h2></div>${UI.hbars(r.by_vehicle_type.map((x) => ({ name: cap(x.type), value: x.count, display: `${x.count} · ${money(x.revenue)}` })))}</div>
       </div>`);
     main.querySelector('[data-range]').addEventListener('submit', (e) => {
@@ -781,8 +903,9 @@
       ${pageHead('Settings', 'Business details, opening hours, pricing rules and loyalty programme.')}
       <form data-settings class="stack">
         <div class="card"><h2>Business</h2>
-          <div class="form-row"><div class="field"><label>Business name</label><input name="business_name" value="${esc(s.business_name)}"></div><div class="field"><label>Phone</label><input name="phone" value="${esc(s.phone)}"></div></div>
-          <div class="form-row"><div class="field"><label>Address</label><input name="address" value="${esc(s.address)}"></div><div class="field"><label>Currency symbol</label><input name="currency" value="${esc(s.currency)}" maxlength="4"></div></div>
+          <div class="form-row"><div class="field"><label>Business name</label><input name="business_name" value="${esc(s.business_name)}"></div><div class="field"><label>Tagline</label><input name="tagline" value="${esc(s.tagline)}" placeholder="& PPF Ceramic Coating"></div></div>
+          <div class="form-row"><div class="field"><label>Phone</label><input name="phone" value="${esc(s.phone)}" placeholder="Shown on the sign-in page and receipts"></div><div class="field"><label>Address</label><input name="address" value="${esc(s.address)}"></div></div>
+          <div class="form-row"><div class="field"><label>Currency symbol</label><input name="currency" value="${esc(s.currency)}" maxlength="4"><small class="muted">e.g. $, Rs, AED, £, €</small></div></div>
         </div>
         <div class="card"><h2>Opening hours &amp; capacity</h2>
           <div class="form-row form-row-3">
@@ -791,7 +914,7 @@
             <div class="field"><label>Slot length (min)</label><input type="number" min="10" name="slot_minutes" value="${esc(s.slot_minutes)}"></div>
           </div>
           <div class="form-row">
-            <div class="field"><label>Wash bays</label><input type="number" min="1" name="bays" value="${esc(s.bays)}"><small class="muted">Max cars per time slot.</small></div>
+            <div class="field"><label>Bays</label><input type="number" min="1" name="bays" value="${esc(s.bays)}"><small class="muted">Cars you can work on at the same time. Long jobs (PPF, coatings) keep their bay until done.</small></div>
             <div class="field"><label>Booking window (days)</label><input type="number" min="1" name="booking_window_days" value="${esc(s.booking_window_days)}"><small class="muted">How far ahead customers can book.</small></div>
           </div>
           <label>Open on</label><div class="btn-row">${days.map((d, i) => `<label class="check"><input type="checkbox" name="open_days" value="${i}" ${s.open_days.includes(i) ? 'checked' : ''}> ${d.slice(0, 3)}</label>`).join('')}</div>

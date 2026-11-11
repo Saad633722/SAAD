@@ -2,13 +2,13 @@
 
 const express = require('express');
 const { hashPassword, verifyPassword, createSession, destroySession, rateLimit } = require('../auth');
-const { availability, HttpError, str, VEHICLE_TYPES, PAYMENT_METHODS } = require('../bookings');
+const { availability, HttpError, str, int, VEHICLE_TYPES, PAYMENT_METHODS, CATEGORIES } = require('../bookings');
 const { now } = require('../db');
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function publicSettings(s) {
-  const keys = ['business_name', 'phone', 'address', 'currency', 'tax_rate', 'open_time', 'close_time', 'slot_minutes', 'open_days', 'booking_window_days', 'large_vehicle_surcharge', 'points_per_unit', 'reward_points', 'reward_value'];
+  const keys = ['business_name', 'tagline', 'phone', 'address', 'currency', 'tax_rate', 'open_time', 'close_time', 'slot_minutes', 'open_days', 'booking_window_days', 'large_vehicle_surcharge', 'points_per_unit', 'reward_points', 'reward_value'];
   return Object.fromEntries(keys.map((k) => [k, s[k]]));
 }
 
@@ -58,15 +58,27 @@ module.exports = function publicRoutes(db, { secureCookies }) {
   });
 
   r.get('/services', (_req, res) => {
-    res.json({ services: db.all('SELECT id, name, description, price, duration_min, kind FROM services WHERE active = 1 ORDER BY kind DESC, price') });
+    res.json({
+      services: db.all(
+        `SELECT id, name, description, price, duration_min, kind, category, warranty_months, maintenance_months
+           FROM services WHERE active = 1 ORDER BY kind DESC, price`,
+      ),
+    });
   });
 
   r.get('/settings', (_req, res) => {
-    res.json({ settings: publicSettings(db.getSettings()), vehicle_types: VEHICLE_TYPES, payment_methods: PAYMENT_METHODS });
+    res.json({ settings: publicSettings(db.getSettings()), vehicle_types: VEHICLE_TYPES, payment_methods: PAYMENT_METHODS, categories: CATEGORIES });
   });
 
+  // ?duration=<minutes of work> checks that a bay is free for the whole job.
+  // ?exclude=<booking id> ignores one of the caller's own bookings (used when rescheduling it).
   r.get('/availability', (req, res) => {
-    res.json(availability(db, String(req.query.date || '')));
+    let excludeId = int(req.query.exclude);
+    if (excludeId) {
+      const own = req.user && (req.user.role === 'admin' || db.get('SELECT 1 FROM bookings WHERE id = ? AND customer_id = ?', excludeId, req.user.id));
+      if (!own) excludeId = null;
+    }
+    res.json(availability(db, String(req.query.date || ''), { duration: req.query.duration, excludeId }));
   });
 
   return r;

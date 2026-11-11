@@ -1,9 +1,9 @@
-# 🚿 Car Wash Manager
+# Mr.Clean Car Detailing & PPF Ceramic Coating — Management App
 
-A complete car wash management web app with two panels:
+The booking and management web app for **Mr.Clean Car Detailing & PPF Ceramic Coating**. It has two panels:
 
-- **Admin panel** (`/admin`): runs the business. It includes a **full history for every car**.
-- **Customer panel** (`/app`): customers register, add their cars, book washes, track status and see their own wash history.
+- **Admin panel** (`/admin`): runs the shop. It keeps a **full history for every car**, including ceramic coating and PPF warranties.
+- **Customer panel** (`/app`): customers register, add their cars, book services, follow the job while it's in the shop, and see their car's history and warranties.
 
 It is built with Node.js, Express and SQLite (the `node:sqlite` module that ships with Node). The frontend is plain HTML, CSS and JS, so there is no build step and only one npm dependency.
 
@@ -15,7 +15,7 @@ Requires **Node.js 22.13 or newer**.
 
 ```bash
 npm install
-npm run seed:demo   # optional: demo customers, cars and ~6 months of wash history
+npm run seed:demo   # optional: demo customers, cars, ~6 months of history, coatings & PPF
 npm start           # http://localhost:3000
 ```
 
@@ -23,53 +23,47 @@ Sign in at <http://localhost:3000>. The app sends each user to the right panel f
 
 | Role     | Email                 | Password   |
 |----------|-----------------------|------------|
-| Admin    | `admin@carwash.local` | `admin123` |
+| Admin    | `admin@mrclean.local` | `admin123` |
 | Customer (demo data) | `maria@example.com` (also james, aisha, tom, yuki @example.com) | `demo123` |
 
 > **Change the admin password** under Settings, or set `ADMIN_EMAIL` and `ADMIN_PASSWORD` before the first start.
 
+> **Prices are placeholders.** The starter price list (in `$`) is only an example. Set your currency and contact details under **Settings**, and your real prices, work times and warranties under **Services & pricing**.
+
 ## Features
 
+### Built for a detailing, PPF and ceramic coating shop
+- **Service lines**: Car wash, Detailing, Ceramic coating and PPF, each with its own packages and add-ons. Every service has a price, a **work time** and an optional **warranty** and **maintenance interval**.
+- **Multi-day jobs**: a PPF or coating job keeps its bay until it's done, over several days if needed. Online booking only offers drop-off times when a bay is free for the **whole** job, and every booking shows when the car will be **ready**.
+- **Warranties and maintenance**: when a coating or PPF job is completed, the car automatically gets a protection record with the applied date, warranty end date and next maintenance visit. Older work can be added by hand.
+- **Follow-ups**: the admin dashboard lists cars whose maintenance visit is due or overdue, and warranties ending within 30 days. Each one shows the owner's phone number and a one-click "Book visit". Customers see the same reminder on their home page.
+
 ### Admin panel
-- **Dashboard**: today's bookings, washing now and done, today's and this month's revenue, unpaid jobs, average rating, a 14-day revenue chart, top packages and the latest feedback.
-- **Live queue**: today's cars with one-click *Confirm → Start wash → Complete* and *Mark paid* buttons.
-- **Bookings**: search by plate, code, name or phone. Filter by status, payment and date range. The booking detail lets staff:
-  - change status: pending → confirmed → in progress → completed, or cancelled / no-show
-  - assign staff and a wash bay, reschedule, and record mileage
-  - record payment (cash, card, mobile) and keep internal notes the customer never sees
-  - view the full activity timeline (who did what, and when) and print a receipt
-- **Walk-ins**: book a car that arrives without an appointment. Type the plate and the car is created, or reused if it has visited before. The booking can start right away.
-- **🚗 Vehicles & history**: every car that has visited. Each car's page shows:
-  - owner, type, colour and year, and when the car was first seen
-  - stats: completed washes, total spent, average ticket, last visit, how often it visits, favourite package, average rating, last mileage, and cancellations and no-shows
-  - **the complete wash history**: each visit expands to show the package, extras, price breakdown, staff, bay, mileage, payment, customer and internal notes, rating, and a status timeline
-  - **vehicle notes** for damage, preferences and warnings, e.g. "dent on rear door (pre-existing)"
-  - a printable history
-- **Customers**: list and profile with their cars, bookings, total spent and loyalty points. Admins can adjust points, reset a password, or disable the account.
-- **Services & pricing**: create, edit and hide wash packages and add-on extras (price and duration). Services that appear in past bookings are hidden instead of deleted, so history stays correct.
-- **Staff**: add and edit staff, see jobs done today and in total, average rating, and who is washing right now.
-- **Reports**: any date range (with presets). Shows revenue, washes, average ticket, cancellations, daily revenue, and breakdowns by package, add-on, staff, payment method, busiest hours and vehicle type. **CSV export.**
-- **Settings**:
-  - business name, address, phone and currency
-  - opening hours, open days, slot length, number of bays (cars per slot) and how far ahead customers can book
-  - tax rate and the large-vehicle surcharge
-  - the loyalty programme rules
+- **Dashboard**: today's queue with one-click *Confirm → Start job → Complete* and *Mark paid*; revenue; unpaid jobs; rating; follow-ups; a 14-day revenue chart; top packages; latest feedback.
+- **Bookings**: search and filters. The booking detail covers status changes, staff and bay, rescheduling, mileage, payment, internal notes, an activity timeline and a printable receipt.
+- **Walk-ins**: type the plate; a car that has visited before is recognised and its history continues.
+- **🚗 Vehicles & history**: every car, with:
+  - owner details and stats: visits, total spent, average ticket, last visit, visit frequency, favourite package, rating, mileage
+  - **Protection & warranty** cards for coatings and PPF
+  - the **complete service history**: package, extras, prices, staff, bay, payment, notes, rating and a status timeline for every visit
+  - vehicle notes (damage, preferences, warnings) and a printable history
+- **Customers**: profiles, cars, bookings, loyalty points, password reset, and disabling an account.
+- **Services & pricing**, **Staff**, **Reports** (with revenue by service line and CSV export) and **Settings** (name, tagline, contact, currency, hours, bays, tax, surcharge, loyalty).
 
 ### Customer panel
-- Register and sign in.
-- **My vehicles**: add, edit or remove cars, and view each car's wash history. If a car has visited before as a walk-in, adding its plate links the existing history to the account.
-- **Book a wash**:
-  - choose a car, a package and extras, then pick a date and a **free time slot** (slots are limited by the number of bays)
-  - a live price summary shows the SUV, pickup and van surcharge, tax and loyalty discount
-- **My bookings**: live status (pending, confirmed, in progress, completed) with a timeline. Customers can cancel or reschedule, view and print the receipt, **rate a wash 1–5 stars with feedback**, and book again in one click.
-- **Loyalty points**: earned on each completed wash and redeemed for discounts. Points come back if the booking is cancelled.
-- **Profile**: update details and change the password.
+- Register and add cars. A car that came in earlier as a walk-in keeps its history when the customer adds its plate.
+- **Book a service**: services are grouped by line and show their work time and warranty. Customers pick a drop-off time and see when the car will be ready, with a live price (SUV/pickup/van surcharge, tax, loyalty discount).
+- **My bookings**: live status, a ready-by time, cancel or reschedule, receipts, ratings, and book again.
+- **My vehicles**: the service history plus coating and PPF warranties, with maintenance reminders.
+- Loyalty points and profile.
 
 ## Screenshots
 
 | Admin dashboard | Customer booking |
 |---|---|
 | ![Admin dashboard](docs/screenshots/admin-dashboard.png) | ![Customer booking](docs/screenshots/customer-booking.png) |
+| **Sign-in page** | **Customer home (maintenance reminder)** |
+| ![Landing](docs/screenshots/landing.png) | ![Customer home](docs/screenshots/customer-home.png) |
 
 ## Configuration
 
@@ -79,13 +73,13 @@ Environment variables (all optional):
 |-------------------|----------------------|-------------|
 | `PORT`            | `3000`               | HTTP port |
 | `DB_PATH`         | `data/carwash.db`    | SQLite database file |
-| `ADMIN_EMAIL`     | `admin@carwash.local`| Admin account created on first start |
+| `ADMIN_EMAIL`     | `admin@mrclean.local`| Admin account created on first start |
 | `ADMIN_PASSWORD`  | `admin123`           | Its password (first start only) |
 | `ADMIN_NAME`      | `Administrator`      | Its display name |
 | `SECURE_COOKIES`  | `false`              | Set `true` when served over HTTPS |
 | `TRUST_PROXY`     | –                    | Express `trust proxy` setting when behind a reverse proxy |
 
-To start from a clean slate, stop the app and delete the `data/` folder.
+To start from a clean slate, stop the app and delete the `data/` folder. Databases from the earlier version are upgraded automatically on start-up.
 
 ## Project structure
 
@@ -95,7 +89,8 @@ src/
   app.js               Express app, middleware, page guards
   db.js                SQLite schema, seed data, settings
   auth.js              password hashing (scrypt), cookie sessions, role guards
-  bookings.js          pricing, availability, status workflow, loyalty, vehicle history
+  bookings.js          pricing, bay scheduling (multi-day jobs), status workflow, loyalty,
+                       warranties & follow-ups, vehicle history
   routes/public.js     login/register, services, availability
   routes/customer.js   /api/my/*    (customer panel)
   routes/admin.js      /api/admin/* (admin panel)
@@ -103,7 +98,8 @@ public/
   index.html           landing + sign in / register
   admin/               admin panel (index.html + admin.js)
   app/                 customer panel (index.html + app.js)
-  css/style.css        shared styles (light & dark mode, responsive)
+  css/style.css        shared styles in the Mr.Clean colours (light & dark mode, responsive)
+  img/                 logo and favicon
   js/common.js         shared UI helpers (API client, modals, router, charts)
 scripts/seed-demo.js   demo data
 test/api.test.js       API tests (node:test)
@@ -115,7 +111,7 @@ test/api.test.js       API tests (node:test)
 npm test
 ```
 
-The tests cover authentication and role protection, vehicle ownership, pricing and surcharges, slot capacity, the booking lifecycle, loyalty points (earning, redeeming and refunding), walk-in history being claimed by a customer, the vehicle history endpoint, reports and CSV export, and admin CRUD.
+The tests cover multi-day bay scheduling, warranty and maintenance tracking, follow-ups, database upgrades, authentication and role protection, vehicle ownership, pricing and surcharges, slot capacity, the booking lifecycle, loyalty points (earning, redeeming and refunding), walk-in history being claimed by a customer, the vehicle history endpoint, reports and CSV export, and admin CRUD.
 
 ## Security notes
 - Passwords are hashed with scrypt. Sessions are random tokens stored server-side in an `HttpOnly`, `SameSite=Lax` cookie.

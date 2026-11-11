@@ -88,7 +88,7 @@ module.exports = function adminRoutes(db) {
     const queue = B.withAddons(
       db,
       db.all(
-        `SELECT b.id, b.code, b.status, b.scheduled_at, b.bay, b.total, b.service_name, b.payment_status, b.source,
+        `SELECT b.id, b.code, b.status, b.scheduled_at, b.duration_min, b.bay, b.total, b.service_name, b.service_category, b.payment_status, b.source,
                 v.id AS vehicle_id, v.plate, v.make, v.model, v.color, u.name AS customer_name, st.name AS staff_name
            FROM bookings b JOIN vehicles v ON v.id = b.vehicle_id
            LEFT JOIN users u ON u.id = b.customer_id LEFT JOIN staff st ON st.id = b.staff_id
@@ -113,6 +113,7 @@ module.exports = function adminRoutes(db) {
       top_services,
       queue,
       recent_feedback,
+      followups: B.followUps(db),
     });
   });
 
@@ -272,7 +273,9 @@ module.exports = function adminRoutes(db) {
               COUNT(CASE WHEN b.status = 'completed' THEN 1 END) AS washes,
               COALESCE(SUM(CASE WHEN b.status = 'completed' THEN b.total END), 0) AS total_spent,
               MAX(CASE WHEN b.status = 'completed' THEN b.scheduled_at END) AS last_wash,
-              COUNT(CASE WHEN b.status IN ('pending','confirmed','in_progress') THEN 1 END) AS active_bookings
+              COUNT(CASE WHEN b.status IN ('pending','confirmed','in_progress') THEN 1 END) AS active_bookings,
+              (SELECT GROUP_CONCAT(DISTINCT p.category) FROM vehicle_protections p
+                WHERE p.vehicle_id = v.id AND (p.warranty_until IS NULL OR p.warranty_until >= ?)) AS protection_categories
          FROM vehicles v
          LEFT JOIN users u ON u.id = v.owner_id
          LEFT JOIN bookings b ON b.vehicle_id = v.id
@@ -280,6 +283,7 @@ module.exports = function adminRoutes(db) {
         GROUP BY v.id
         ORDER BY last_wash IS NULL, last_wash DESC, v.id DESC
         LIMIT 500`,
+      today(),
       ...params,
     );
     res.json({ vehicles });
@@ -357,6 +361,58 @@ module.exports = function adminRoutes(db) {
   r.delete('/vehicles/:id/notes/:noteId', (req, res) => {
     db.run('DELETE FROM vehicle_notes WHERE id = ? AND vehicle_id = ?', int(req.params.noteId), int(req.params.id));
     res.json({ ok: true });
+  });
+
+  // ---------- Protections (ceramic coating / PPF warranties) ----------
+  const protectionResponse = (vehicleId, id) => ({
+    protection: B.protectionsByVehicle(db, [vehicleId]).get(vehicleId).find((p) => p.id === id),
+  });
+
+  r.post('/vehicles/:id/protections', (req, res) => {
+    const v = getVehicle(req.params.id);
+    const p = B.protectionInput(req.body);
+    const { id } = db.run(
+      `INSERT INTO vehicle_protections (vehicle_id, name, category, applied_at, warranty_months, warranty_until, maintenance_months, details, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      v.id,
+      p.name,
+      p.category,
+      p.applied_at,
+      p.warranty_months,
+      p.warranty_until,
+      p.maintenance_months,
+      p.details,
+      now(),
+    );
+    res.status(201).json(protectionResponse(v.id, id));
+  });
+
+  r.patch('/protections/:id', (req, res) => {
+    const current = db.get('SELECT * FROM vehicle_protections WHERE id = ?', int(req.params.id));
+    if (!current) throw new HttpError(404, 'Protection record not found.');
+    const p = B.protectionInput(req.body, current);
+    db.run(
+      `UPDATE vehicle_protections SET name = ?, category = ?, applied_at = ?, warranty_months = ?, warranty_until = ?, maintenance_months = ?, details = ?
+        WHERE id = ?`,
+      p.name,
+      p.category,
+      p.applied_at,
+      p.warranty_months,
+      p.warranty_until,
+      p.maintenance_months,
+      p.details,
+      current.id,
+    );
+    res.json(protectionResponse(current.vehicle_id, current.id));
+  });
+
+  r.delete('/protections/:id', (req, res) => {
+    db.run('DELETE FROM vehicle_protections WHERE id = ?', int(req.params.id));
+    res.json({ ok: true });
+  });
+
+  r.get('/followups', (_req, res) => {
+    res.json({ followups: B.followUps(db) });
   });
 
   // ---------- Customers ----------
@@ -465,12 +521,23 @@ module.exports = function adminRoutes(db) {
     if (!Number.isFinite(price) || price < 0) throw new HttpError(400, 'Price must be a positive number.');
     if (!duration || duration < 1) throw new HttpError(400, 'Duration must be at least 1 minute.');
     if (!['package', 'addon'].includes(kind)) throw new HttpError(400, 'Type must be package or add-on.');
+    const category = body.category !== undefined ? String(body.category) : current.category || 'other';
+    if (!B.CATEGORIES.includes(category)) throw new HttpError(400, 'Unknown category.');
+    const months = (key, label) => {
+      if (body[key] === undefined) return current[key] ?? null;
+      const n = int(body[key]);
+      if (n !== null && (n < 0 || n > 600)) throw new HttpError(400, `${label} must be between 0 and 600 months.`);
+      return n || null;
+    };
     return {
       name,
       description: body.description !== undefined ? str(body.description, 500) : current.description,
       price: round2(price),
       duration,
       kind,
+      category,
+      warranty: months('warranty_months', 'Warranty'),
+      maintenance: months('maintenance_months', 'Maintenance interval'),
       active: body.active !== undefined ? (body.active ? 1 : 0) : (current.active ?? 1),
     };
   };
@@ -478,12 +545,16 @@ module.exports = function adminRoutes(db) {
   r.post('/services', (req, res) => {
     const s = serviceInput(req.body);
     const { id } = db.run(
-      'INSERT INTO services (name, description, price, duration_min, kind, active, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      `INSERT INTO services (name, description, price, duration_min, kind, category, warranty_months, maintenance_months, active, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       s.name,
       s.description,
       s.price,
       s.duration,
       s.kind,
+      s.category,
+      s.warranty,
+      s.maintenance,
       s.active,
       now(),
     );
@@ -494,7 +565,20 @@ module.exports = function adminRoutes(db) {
     const current = db.get('SELECT * FROM services WHERE id = ?', int(req.params.id));
     if (!current) throw new HttpError(404, 'Service not found.');
     const s = serviceInput(req.body, current);
-    db.run('UPDATE services SET name = ?, description = ?, price = ?, duration_min = ?, kind = ?, active = ? WHERE id = ?', s.name, s.description, s.price, s.duration, s.kind, s.active, current.id);
+    db.run(
+      `UPDATE services SET name = ?, description = ?, price = ?, duration_min = ?, kind = ?, category = ?, warranty_months = ?, maintenance_months = ?, active = ?
+        WHERE id = ?`,
+      s.name,
+      s.description,
+      s.price,
+      s.duration,
+      s.kind,
+      s.category,
+      s.warranty,
+      s.maintenance,
+      s.active,
+      current.id,
+    );
     res.json({ service: db.get('SELECT * FROM services WHERE id = ?', current.id) });
   });
 
@@ -624,7 +708,14 @@ module.exports = function adminRoutes(db) {
       from,
       to,
     );
-    res.json({ from, to, summary, by_day, by_service, by_addon, by_staff, by_payment, by_hour, by_vehicle_type });
+    const by_category = db.all(
+      `SELECT COALESCE(b.service_category, s.category, 'other') AS category, COUNT(*) AS count, ROUND(SUM(b.total), 2) AS revenue
+         FROM bookings b LEFT JOIN services s ON s.id = b.service_id
+        WHERE b.status = 'completed' AND ${inRange} GROUP BY 1 ORDER BY revenue DESC`,
+      from,
+      to,
+    );
+    res.json({ from, to, summary, by_day, by_category, by_service, by_addon, by_staff, by_payment, by_hour, by_vehicle_type });
   });
 
   r.get('/reports/bookings.csv', (req, res) => {
@@ -683,7 +774,7 @@ module.exports = function adminRoutes(db) {
   r.put('/settings', (req, res) => {
     const body = req.body || {};
     const numeric = ['tax_rate', 'slot_minutes', 'bays', 'booking_window_days', 'large_vehicle_surcharge', 'points_per_unit', 'reward_points', 'reward_value'];
-    const text = ['business_name', 'phone', 'address', 'currency'];
+    const text = ['business_name', 'tagline', 'phone', 'address', 'currency'];
     const updates = {};
     for (const key of Object.keys(body)) {
       if (!(key in DEFAULT_SETTINGS)) continue;
