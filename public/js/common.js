@@ -240,15 +240,16 @@
     return data;
   }
 
-  async function logout() {
+  async function logout(to = '/') {
     await api('POST', '/api/auth/logout').catch(() => {});
-    location.href = '/';
+    location.href = to;
   }
 
   function bindShell(user) {
     document.querySelectorAll('[data-user-name]').forEach((el) => (el.textContent = user.name));
     document.querySelectorAll('[data-user-email]').forEach((el) => (el.textContent = user.email));
-    document.querySelectorAll('[data-logout]').forEach((b) => b.addEventListener('click', logout));
+    document.querySelectorAll('[data-user-email]').forEach((el) => (el.textContent = user.email || user.position || (user.role === 'employee' ? 'Employee' : '')));
+    document.querySelectorAll('[data-logout]').forEach((b) => b.addEventListener('click', () => logout(user.role === 'customer' ? '/' : '/staff')));
     document.querySelectorAll('[data-nav-toggle]').forEach((b) => b.addEventListener('click', () => document.body.classList.toggle('nav-open')));
   }
 

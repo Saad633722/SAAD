@@ -7,6 +7,7 @@ const { loadUser, requireRole } = require('./auth');
 const publicRoutes = require('./routes/public');
 const customerRoutes = require('./routes/customer');
 const adminRoutes = require('./routes/admin');
+const inventoryRoutes = require('./routes/inventory');
 
 function createApp(options = {}) {
   const db = options.db || openDatabase(options.dbPath || ':memory:', options);
@@ -39,20 +40,24 @@ function createApp(options = {}) {
   app.use(loadUser(db));
   app.use('/api', publicRoutes(db, { secureCookies: options.secureCookies }));
   app.use('/api/my', requireRole('customer'), customerRoutes(db));
-  app.use('/api/admin', requireRole('admin'), adminRoutes(db));
+  // The admin panel is shared by the admin and employees (PIN sign-in); routes limit what employees can do.
+  app.use('/api/admin/inventory', requireRole(['admin', 'employee']), inventoryRoutes(db));
+  app.use('/api/admin', requireRole(['admin', 'employee']), adminRoutes(db));
   app.use('/api', (_req, res) => res.status(404).json({ error: 'Not found.' }));
 
   // Pages: send people to the right panel.
   const pub = path.join(__dirname, '..', 'public');
   app.get(['/admin', '/admin/'], (req, res) => {
-    if (!req.user || req.user.role !== 'admin') return res.redirect('/?next=admin');
+    if (!req.user || !['admin', 'employee'].includes(req.user.role)) return res.redirect('/staff');
     res.sendFile(path.join(pub, 'admin', 'index.html'));
   });
   app.get(['/app', '/app/'], (req, res) => {
     if (!req.user) return res.redirect('/');
-    if (req.user.role === 'admin') return res.redirect('/admin');
+    if (req.user.role !== 'customer') return res.redirect('/admin');
     res.sendFile(path.join(pub, 'app', 'index.html'));
   });
+  // Shop tablet: the sign-in page opened on the PIN pad.
+  app.get(['/staff', '/staff/'], (_req, res) => res.sendFile(path.join(pub, 'index.html')));
   app.use(express.static(pub, { index: 'index.html' }));
 
   // Error handler

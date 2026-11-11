@@ -13,6 +13,8 @@ const path = require('node:path');
 const { openDatabase, now } = require('../src/db');
 const { hashPassword } = require('../src/auth');
 const B = require('../src/bookings');
+const inventory = require('../src/inventory');
+const { pinHash } = require('../src/auth');
 
 const db = openDatabase(process.env.DB_PATH || path.join(__dirname, '..', 'data', 'carwash.db'), {
   adminEmail: process.env.ADMIN_EMAIL,
@@ -124,6 +126,8 @@ function makeBooking(vehicleId, { day, hour, status, payment = 'paid', rating, p
     id,
   );
   B.recordProtections(db, id, ts(done));
+  inventory.deductForBooking(db, id, 'Administrator');
+  db.run('UPDATE inventory_movements SET created_at = ? WHERE booking_id = ?', ts(done), id);
   // Payments: mostly one method, sometimes split (e.g. cash + JazzCash), sometimes only partly paid
   const bill = db.get('SELECT * FROM bookings WHERE id = ?', id);
   if (bill.total > 0 && payment !== 'unpaid') {
@@ -186,6 +190,14 @@ db.tx(() => {
     now(),
   );
 
+  // Stock: a delivery last week and a stock count; Sam Lee signs in with PIN 3333
+  const item = (name) => db.get('SELECT id FROM inventory_items WHERE name = ?', name).id;
+  inventory.move(db, item('Car shampoo'), { type: 'purchase', quantity: 20, unit_cost: 850, note: 'Delivery — invoice 1043' }, 'Administrator');
+  inventory.move(db, item('Microfiber towels'), { type: 'adjust', counted: 26, note: 'Monthly stock count' }, 'Administrator');
+  inventory.move(db, item('Glass coating kit'), { type: 'waste', quantity: 1, note: 'Bottle dropped' }, 'Alex Carter');
+  db.run("UPDATE inventory_movements SET created_at = ? WHERE note IN ('Delivery — invoice 1043', 'Monthly stock count', 'Bottle dropped')", ts(daysAgo(6, 11)));
+  db.run('UPDATE staff SET pin_hash = ? WHERE id = ?', pinHash(db.pinSecret(), '3333'), staff[1].id);
+
   const note = (vid, kind, text, day) => db.run('INSERT INTO vehicle_notes (vehicle_id, kind, note, author_name, created_at) VALUES (?, ?, ?, ?, ?)', vid, kind, text, 'Administrator', ts(daysAgo(day, 10)));
   note(vehicles[0], 'damage', 'Small dent on rear left door (pre-existing, photographed).', 120);
   note(vehicles[0], 'preference', 'Customer prefers no tire shine.', 60);
@@ -197,3 +209,4 @@ db.tx(() => {
 console.log('Demo data created.');
 console.log('  Customers: maria@example.com, james@example.com, aisha@example.com, tom@example.com, yuki@example.com');
 console.log('  Password:  demo123');
+console.log('  Staff PINs: admin 2222 · Alex Carter 1111 · Sam Lee 3333');

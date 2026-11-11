@@ -5,10 +5,19 @@
   const cache = { services: [], staff: [] };
 
   const me = await api('GET', '/api/auth/me');
-  if (!me.user || me.user.role !== 'admin') return (location.href = '/');
+  if (!me.user || !['admin', 'employee'].includes(me.user.role)) return (location.href = '/staff');
+  // Employees (PIN sign-in) see the floor tools only: no reports, settings, prices catalogue, staff or customer accounts.
+  const isAdmin = me.user.role === 'admin';
+  document.body.classList.add(`role-${me.user.role}`);
+  if (!isAdmin) {
+    document.querySelectorAll('[data-admin-only]').forEach((el) => el.remove());
+    document.querySelectorAll('[data-role-badge]').forEach((el) => (el.textContent = 'EMPLOYEE'));
+  }
+  const canDiscount = () => isAdmin || UI.state.settings.employee_can_discount;
+  const fmtQty = (n) => Number(n).toLocaleString('en', { maximumFractionDigits: 3 });
   UI.bindShell(me.user);
   await UI.loadSettings();
-  document.title = `Admin — ${UI.state.settings.business_name}`;
+  document.title = `${isAdmin ? 'Admin' : 'Staff'} — ${UI.state.settings.business_name}`;
 
   async function refreshCatalog() {
     const [s, st] = await Promise.all([api('GET', '/api/admin/services'), api('GET', '/api/admin/staff')]);
@@ -83,14 +92,14 @@
                   .map(
                     (p) => `<li><span><b>${p.amount < 0 ? 'Refund' : esc(money(p.amount))}</b>${p.amount < 0 ? ` ${esc(money(-p.amount))}` : ''} · ${esc(p.method)}${p.reference ? ` <small class="muted">#${esc(p.reference)}</small>` : ''}
                     <br><small class="muted">${esc(fmtDateTime(p.created_at))}${p.received_by ? ` · ${esc(p.received_by)}` : ''}${p.note ? ` · ${esc(p.note)}` : ''}</small></span>
-                    <button type="button" class="btn btn-ghost btn-sm" data-del-payment="${p.id}" title="Remove (entered by mistake)">✕</button></li>`,
+                    ${isAdmin ? `<button type="button" class="btn btn-ghost btn-sm" data-del-payment="${p.id}" title="Remove (entered by mistake)">✕</button>` : ''}</li>`,
                   )
                   .join('')}</ul>`
               : '<p class="muted" style="font-size:.9rem">No payments yet.</p>'
           }
           <div class="btn-row" style="margin-bottom:18px">
             ${b.balance > 0.004 && !closed ? '<button type="button" class="btn btn-success btn-sm" data-pay>Take payment</button>' : ''}
-            ${b.amount_paid > 0 ? `<button type="button" class="btn btn-sm ${b.balance < -0.004 ? 'btn-primary' : ''}" data-refund>Refund</button>` : ''}
+            ${b.amount_paid > 0 && isAdmin ? `<button type="button" class="btn btn-sm ${b.balance < -0.004 ? 'btn-primary' : ''}" data-refund>Refund</button>` : ''}
           </div>
           <form data-edit>
             <div class="form-row">
@@ -227,7 +236,7 @@
           <button type="button" class="btn btn-sm" data-add-custom>+ Custom item</button>
         </div>
         ${large ? `<label class="check" style="margin-bottom:12px"><input type="checkbox" name="apply_surcharge" ${b.surcharge > 0 ? 'checked' : ''}> Add size surcharge (${esc(UI.state.settings.large_vehicle_surcharge)}% for ${esc(cap(b.vehicle_type))})</label>` : ''}
-        ${discountFields(b.manual_discount ? b.discount_type || 'amount' : 'amount', b.manual_discount ? b.discount_value || b.manual_discount : '', b.discount_reason || '')}
+        ${canDiscount() ? discountFields(b.manual_discount ? b.discount_type || 'amount' : 'amount', b.manual_discount ? b.discount_value || b.manual_discount : '', b.discount_reason || '') : b.manual_discount ? `<p class="muted">Discount: ${money(b.manual_discount)}${b.discount_reason ? ` (${esc(b.discount_reason)})` : ''} — only the admin can change discounts.</p>` : ''}
         <div class="bill-preview" data-preview></div>
         ${b.amount_paid > 0 ? `<small class="muted">Already paid: ${money(b.amount_paid)}. If the new total is lower, the difference shows as a refund due.</small>` : ''}`,
       onOpen: (el) => {
@@ -238,8 +247,8 @@
             subtotal: (Number(el.querySelector('[name=service_price]').value) || 0) + items,
             vehicleType: b.vehicle_type,
             applySurcharge: large ? el.querySelector('[name=apply_surcharge]').checked : false,
-            discountType: el.querySelector('[name=discount_type]').value,
-            discountValue: el.querySelector('[name=discount_value]').value,
+            discountType: el.querySelector('[name=discount_type]')?.value || b.discount_type || 'amount',
+            discountValue: el.querySelector('[name=discount_value]') ? el.querySelector('[name=discount_value]').value : b.discount_value || b.manual_discount,
             pointsDiscount,
           });
           el.querySelector('[data-preview]').innerHTML = previewHtml(t);
@@ -276,9 +285,7 @@
           service_price: d.service_price,
           items,
           apply_surcharge: large ? d.apply_surcharge : false,
-          discount_type: d.discount_type,
-          discount_value: d.discount_value || 0,
-          discount_reason: d.discount_reason,
+          ...(canDiscount() ? { discount_type: d.discount_type, discount_value: d.discount_value || 0, discount_reason: d.discount_reason } : {}),
         });
         toast('Prices updated', 'success');
         await onDone();
@@ -391,7 +398,7 @@
         <div class="field"><label>Package price (${esc(UI.state.settings.currency)})</label><input name="service_price" type="number" min="0" step="any" required><small class="muted">Change it to match the vehicle (see your rate list).</small></div>
         <div class="field"><label>&nbsp;</label><label class="check"><input type="checkbox" name="apply_surcharge" ${vehicle && !LARGE.includes(vehicle.type) ? '' : 'checked'}> Add size surcharge for SUV / pickup / van (${esc(UI.state.settings.large_vehicle_surcharge)}%)</label></div>
       </div>
-      ${discountFields()}
+      ${canDiscount() ? discountFields() : ''}
       <div class="bill-preview" data-preview style="margin-bottom:14px"></div>
       <h3>When &amp; who</h3>
       <label class="check" style="margin-bottom:10px"><input type="checkbox" name="start_now" checked> Start the job now (car is here)</label>
@@ -423,8 +430,8 @@
               subtotal: (Number(price.value) || 0) + extras,
               vehicleType: type,
               applySurcharge: el.querySelector('[name=apply_surcharge]').checked,
-              discountType: el.querySelector('[name=discount_type]').value,
-              discountValue: el.querySelector('[name=discount_value]').value,
+              discountType: el.querySelector('[name=discount_type]')?.value || 'amount',
+              discountValue: el.querySelector('[name=discount_value]')?.value || 0,
             }),
           );
         };
@@ -443,9 +450,7 @@
           mileage: d.mileage || null,
           service_price: d.service_price,
           apply_surcharge: d.apply_surcharge,
-          discount_type: d.discount_type,
-          discount_value: d.discount_value || 0,
-          discount_reason: d.discount_reason,
+          ...(canDiscount() ? { discount_type: d.discount_type, discount_value: d.discount_value || 0, discount_reason: d.discount_reason } : {}),
           admin_notes: d.admin_notes,
         };
         if (vehicle) payload.vehicle_id = vehicle.id;
@@ -494,9 +499,15 @@
       ${pageHead('Dashboard', esc(fmtDate(UI.localDate() + ' 12:00')), '<button class="btn btn-primary" data-new>+ New booking / walk-in</button>')}
       <div class="grid grid-4">
         <div class="card stat"><span class="label">Today's bookings</span><span class="value">${t.total || 0}</span><span class="sub">${t.waiting || 0} waiting · ${t.in_progress || 0} in progress · ${t.completed || 0} done</span></div>
-        <div class="card stat"><span class="label">Revenue today</span><span class="value">${money(t.revenue)}</span><span class="sub">This month: ${money(s.month.revenue)}</span></div>
+        ${
+          isAdmin
+            ? `<div class="card stat"><span class="label">Revenue today</span><span class="value">${money(t.revenue)}</span><span class="sub">This month: ${money(s.month.revenue)}</span></div>
         <div class="card stat"><span class="label">Collected today</span><span class="value">${money(s.collected_today.reduce((sum, m) => sum + m.amount, 0))}</span><span class="sub">${s.collected_today.length ? s.collected_today.map((m) => `${esc(m.method)} ${money(m.amount)}`).join(' · ') : 'No payments yet'}${s.unpaid.count ? `<br><a href="#/bookings?payment=due">${money(s.unpaid.amount)} still due on ${s.unpaid.count} job${s.unpaid.count === 1 ? '' : 's'}</a>` : ''}</span></div>
-        <div class="card stat"><span class="label">Customer rating</span><span class="value">${s.totals.avg_rating ? `${s.totals.avg_rating} ★` : '—'}</span><span class="sub">${s.totals.customers} customers · ${s.totals.vehicles} vehicles</span></div>
+        <div class="card stat"><span class="label">Customer rating</span><span class="value">${s.totals.avg_rating ? `${s.totals.avg_rating} ★` : '—'}</span><span class="sub">${s.totals.customers} customers · ${s.totals.vehicles} vehicles</span></div>`
+            : `<div class="card stat"><span class="label">In the bays</span><span class="value">${t.in_progress || 0}</span><span class="sub">${t.waiting || 0} waiting</span></div>
+               <div class="card stat"><span class="label">Follow-ups</span><span class="value">${s.followups.length}</span><span class="sub">coating &amp; PPF customers to call</span></div>
+               <div class="card stat"><span class="label">Low stock</span><span class="value">${s.low_stock.length}</span><span class="sub"><a href="#/inventory">Inventory →</a></span></div>`
+        }
       </div>
       ${s.totals.pending_total ? `<div class="alert info" style="margin-top:16px">${s.totals.pending_total} online booking${s.totals.pending_total > 1 ? 's are' : ' is'} waiting for confirmation. <a href="#/bookings?status=pending">Review →</a></div>` : ''}
       <div class="card" style="margin-top:16px">
@@ -508,14 +519,24 @@
         <div class="card-head"><h2>Follow-ups: coating &amp; PPF care</h2><span class="muted">${s.followups.length ? `${s.followups.length} to contact` : ''}</span></div>
         ${s.followups.length ? s.followups.slice(0, 10).map(followupRow).join('') : '<div class="empty">No maintenance visits due and no warranties expiring in the next 30 days.</div>'}
       </div>
-      <div class="grid grid-3" style="margin-top:16px">
+      ${
+        s.low_stock.length
+          ? `<div class="card" style="margin-top:16px"><div class="card-head"><h2>📦 Low stock</h2><a href="#/inventory" class="btn btn-sm">Inventory</a></div>
+              <div class="btn-row">${s.low_stock.map((i) => `<span class="badge ${i.quantity <= 0 ? 'overdue' : 'due_soon'}">${esc(i.name)}: ${esc(fmtQty(i.quantity))} ${esc(i.unit)} (reorder at ${esc(fmtQty(i.min_quantity))})</span>`).join('')}</div></div>`
+          : ''
+      }
+      ${
+        isAdmin
+          ? `<div class="grid grid-3" style="margin-top:16px">
         <div class="card span-2"><div class="card-head"><h2>Revenue — last 14 days</h2></div>
           ${UI.barChart(s.revenue_14d.map((d) => ({ label: fmtShortDate(d.day).replace(' ', ' '), value: d.revenue, title: `${fmtDate(d.day)}: ${money(d.revenue)} · ${d.washes} jobs` })), { format: money })}</div>
         <div class="card"><div class="card-head"><h2>Top packages (30 days)</h2></div>${UI.hbars(s.top_services.map((x) => ({ name: x.name, value: x.count, display: `${x.count}×` })))}</div>
       </div>
       <div class="card" style="margin-top:16px"><div class="card-head"><h2>Latest feedback</h2></div>
         ${s.recent_feedback.length ? s.recent_feedback.map((f) => `<div class="note"><div class="meta"><span>${stars(f.rating)} · ${plate(f.plate)} · ${esc(f.customer_name || 'Walk-in')}</span><span>${esc(timeAgo(f.completed_at))}</span></div>${f.feedback ? esc(f.feedback) : '<span class="muted">No comment</span>'}</div>`).join('') : '<div class="empty">No ratings yet.</div>'}
-      </div>`);
+      </div>`
+          : ''
+      }`);
     main.querySelector('[data-new]').addEventListener('click', () => newBooking({ onDone: dashboard }));
     main.querySelectorAll('[data-followup]').forEach((btn) =>
       btn.addEventListener('click', () => {
@@ -724,10 +745,10 @@
         ${statTile('Notes on file', notes.length, notes.filter((n) => n.kind === 'damage').length ? `${notes.filter((n) => n.kind === 'damage').length} damage report(s)` : '')}
       </div>
       <div class="card" style="margin-top:16px">
-        <div class="card-head"><h2>Protection &amp; warranty</h2><button class="btn btn-sm no-print" data-add-protection>+ Add coating / PPF record</button></div>
+        <div class="card-head"><h2>Protection &amp; warranty</h2>${isAdmin ? '<button class="btn btn-sm no-print" data-add-protection>+ Add coating / PPF record</button>' : ''}</div>
         ${
           protections.length
-            ? UI.protectionCards(protections, { admin: true })
+            ? UI.protectionCards(protections, { admin: isAdmin })
             : '<div class="muted">No ceramic coating or PPF on record. A record is created automatically when a coating or PPF job is completed — use “Add” for work done before.</div>'
         }
       </div>
@@ -750,7 +771,7 @@
               ? notes
                   .map(
                     (n) => `<div class="note ${esc(n.kind)}"><div class="meta"><span><span class="badge ${esc(n.kind)}">${esc(cap(n.kind))}</span> ${esc(fmtDateTime(n.created_at))}${n.author_name ? ` · ${esc(n.author_name)}` : ''}</span>
-                     <button class="btn btn-ghost btn-sm no-print" data-del-note="${n.id}" title="Delete">✕</button></div>${esc(n.note)}</div>`,
+                     ${isAdmin ? `<button class="btn btn-ghost btn-sm no-print" data-del-note="${n.id}" title="Delete">✕</button>` : ''}</div>${esc(n.note)}</div>`,
                   )
                   .join('')
               : '<div class="muted">No notes yet. Use notes to record damage, special requests or anything staff should know.</div>'
@@ -767,7 +788,7 @@
     );
     main.querySelector('[data-new]').addEventListener('click', () => newBooking({ vehicle: v, onDone: reload }));
     main.querySelector('[data-edit]').addEventListener('click', () => editVehicle(v, reload));
-    main.querySelector('[data-add-protection]').addEventListener('click', () => protectionForm(v, null, reload));
+    main.querySelector('[data-add-protection]')?.addEventListener('click', () => protectionForm(v, null, reload));
     main.querySelectorAll('[data-edit-protection]').forEach((b) =>
       b.addEventListener('click', () => protectionForm(v, protections.find((p) => p.id === Number(b.dataset.editProtection)), reload)),
     );
@@ -978,7 +999,13 @@
       ${pageHead('Services & pricing', `Large vehicles (SUV, pickup, van) get a ${esc(UI.state.settings.large_vehicle_surcharge)}% surcharge — change it in Settings. Services with a warranty or maintenance interval create a protection record on the car when the job is completed.`, '<button class="btn btn-primary" data-add>+ Add service</button>')}
       <div class="card"><div class="card-head"><h2>Service packages</h2></div>${table('package')}</div>
       <div class="card"><div class="card-head"><h2>Add-on extras</h2></div>${table('addon')}</div>`);
-    const form = (s = {}) =>
+    const stock = (await api('GET', '/api/admin/inventory')).items;
+    const matRow = (m = {}) => `<div class="line-edit" data-mat>
+        <select data-item><option value="">— Choose item —</option>${stock.map((i) => `<option value="${i.id}" ${i.id === m.item_id ? 'selected' : ''}>${esc(i.name)} (${esc(i.unit)})</option>`).join('')}</select>
+        <input data-qty type="number" min="0" step="any" value="${esc(m.quantity ?? '')}" placeholder="Qty per job">
+        <button type="button" class="btn btn-ghost btn-sm" data-remove title="Remove">✕</button></div>`;
+    const form = async (s = {}) => {
+      const materials = s.id ? (await api('GET', `/api/admin/inventory/materials/${s.id}`)).materials : [];
       modal({
         title: s.id ? `Edit ${s.name}` : 'Add service',
         wide: true,
@@ -996,21 +1023,33 @@
             <div class="field"><label>Warranty (months)</label><input name="warranty_months" type="number" min="0" max="600" value="${esc(s.warranty_months)}" placeholder="e.g. 36 for a 3-year coating"><small class="muted">Leave empty if there is no warranty.</small></div>
             <div class="field"><label>Maintenance visit every (months)</label><input name="maintenance_months" type="number" min="0" max="600" value="${esc(s.maintenance_months)}" placeholder="e.g. 6"><small class="muted">Used for follow-up reminders.</small></div>
           </div>
-          <label class="check"><input type="checkbox" name="active" ${s.active === 0 ? '' : 'checked'}> Available for booking</label>`,
+          <label class="check"><input type="checkbox" name="active" ${s.active === 0 ? '' : 'checked'}> Available for booking</label>
+          <h3 style="margin-top:18px">Materials used per job</h3>
+          <p class="muted" style="margin-top:0">Taken out of inventory automatically when a job with this service is completed.</p>
+          <div data-mats>${materials.map(matRow).join('')}</div>
+          <button type="button" class="btn btn-sm" data-add-mat>+ Add material</button>`,
         onOpen: (el) => {
+          const mats = el.querySelector('[data-mats]');
+          el.querySelector('[data-add-mat]').addEventListener('click', () => mats.insertAdjacentHTML('beforeend', matRow()));
+          mats.addEventListener('click', (e) => e.target.closest('[data-remove]') && e.target.closest('[data-mat]').remove());
           const input = el.querySelector('[name=duration_min]');
           const hint = el.querySelector('[data-duration-hint]');
           const show = () => (hint.textContent = Number(input.value) >= 60 ? `= ${UI.fmtDuration(Number(input.value))}` : '');
           input.addEventListener('input', show);
           show();
         },
-        onSubmit: async (d) => {
-          if (s.id) await api('PATCH', `/api/admin/services/${s.id}`, d);
-          else await api('POST', '/api/admin/services', d);
+        onSubmit: async (d, f) => {
+          const list = [...f.querySelectorAll('[data-mat]')]
+            .map((row) => ({ item_id: Number(row.querySelector('[data-item]').value), quantity: Number(row.querySelector('[data-qty]').value) }))
+            .filter((m) => m.item_id);
+          if (list.some((m) => !(m.quantity > 0))) throw new Error('Enter the quantity used for each material.');
+          const saved = s.id ? await api('PATCH', `/api/admin/services/${s.id}`, d) : await api('POST', '/api/admin/services', d);
+          await api('PUT', `/api/admin/inventory/materials/${saved.service.id}`, { materials: list });
           toast('Service saved', 'success');
           services();
         },
       });
+    };
     main.querySelector('[data-add]').addEventListener('click', () => form());
     main.querySelectorAll('[data-edit]').forEach((b) => b.addEventListener('click', () => form(cache.services.find((s) => s.id === Number(b.dataset.edit)))));
     main.querySelectorAll('[data-del]').forEach((b) =>
@@ -1031,12 +1070,13 @@
     await refreshCatalog();
     setPage(`
       ${pageHead('Staff', 'Detailers and installers you can assign to jobs.', '<button class="btn btn-primary" data-add>+ Add staff member</button>')}
-      <div class="card"><div class="table-wrap"><table><thead><tr><th>Name</th><th>Position</th><th>Phone</th><th class="num">Jobs today</th><th class="num">Jobs total</th><th class="num">Avg rating</th><th>Status</th><th></th></tr></thead><tbody>
+      <div class="card"><div class="table-wrap"><table><thead><tr><th>Name</th><th>Position</th><th>Phone</th><th>PIN sign-in</th><th class="num">Jobs today</th><th class="num">Jobs total</th><th class="num">Avg rating</th><th>Status</th><th></th></tr></thead><tbody>
       ${
         cache.staff.length
           ? cache.staff
               .map(
                 (s) => `<tr><td><b>${esc(s.name)}</b></td><td>${esc(s.position || '—')}</td><td>${esc(s.phone || '—')}</td><td class="num">${s.jobs_today}</td><td class="num">${s.jobs_completed}</td><td class="num">${s.avg_rating ? `${s.avg_rating} ★` : '—'}</td>
+          <td>${s.has_pin ? '<span class="badge active">PIN set</span>' : '<span class="badge">No PIN</span>'}</td>
           <td>${!s.active ? '<span class="badge inactive">Inactive</span>' : s.busy ? '<span class="badge in_progress">On a job</span>' : '<span class="badge active">Available</span>'}</td>
           <td class="num"><div class="btn-row" style="justify-content:flex-end"><button class="btn btn-sm" data-edit="${s.id}">Edit</button><button class="btn btn-sm btn-danger" data-del="${s.id}">Remove</button></div></td></tr>`,
               )
@@ -1048,8 +1088,14 @@
         title: s.id ? `Edit ${s.name}` : 'Add staff member',
         body: `<div class="field"><label>Name *</label><input name="name" value="${esc(s.name)}" required></div>
           <div class="form-row"><div class="field"><label>Position</label><input name="position" value="${esc(s.position)}" placeholder="Detailer, PPF installer…"></div><div class="field"><label>Phone</label><input name="phone" value="${esc(s.phone)}"></div></div>
+          <div class="field"><label>PIN for sign-in (4 digits)</label><input name="pin" inputmode="numeric" pattern="\\d{4}" maxlength="4" autocomplete="off" placeholder="${s.has_pin ? 'Leave empty to keep the current PIN' : 'e.g. 1111'}">
+            <small class="muted">Employees sign in on the shop tablet at <b>/staff</b> with this PIN. They can't see reports, settings, prices or customer accounts.</small>
+            ${s.has_pin ? '<label class="check" style="margin-top:6px"><input type="checkbox" name="remove_pin"> Remove PIN (this person can no longer sign in)</label>' : ''}</div>
           ${s.id ? `<label class="check"><input type="checkbox" name="active" ${s.active ? 'checked' : ''}> Active</label>` : ''}`,
         onSubmit: async (d) => {
+          if (d.remove_pin) d.pin = null;
+          else if (!d.pin) delete d.pin;
+          delete d.remove_pin;
           if (s.id) await api('PATCH', `/api/admin/staff/${s.id}`, d);
           else await api('POST', '/api/admin/staff', d);
           toast('Saved', 'success');
@@ -1112,6 +1158,8 @@
           <div class="muted" style="margin-top:8px">Collected in this period: <b>${money(s.collected)}</b> · still due on jobs in this period: <b>${money(s.outstanding)}</b></div></div>
         <div class="card"><div class="card-head"><h2>Busiest hours</h2></div>${r.by_hour.length ? UI.barChart(r.by_hour.map((h) => ({ label: `${h.hour}h`, value: h.count, title: `${h.hour}:00 — ${h.count} jobs` }))) : '<div class="empty">No data.</div>'}</div>
         <div class="card"><div class="card-head"><h2>Vehicle types</h2></div>${UI.hbars(r.by_vehicle_type.map((x) => ({ name: cap(x.type), value: x.count, display: `${x.count} · ${money(x.revenue)}` })))}</div>
+        <div class="card span-2"><div class="card-head"><h2>Materials used</h2><span class="muted">cost ${money(s.materials_cost)} · stock bought ${money(s.purchases)} · revenue minus materials ${money(s.revenue - s.materials_cost)}</span></div>
+          ${simpleTable(r.materials, [['Item', (x) => esc(x.name)], ['Used', (x) => `${fmtQty(x.quantity)} ${esc(x.unit)}`, 1], ['Cost', (x) => money(x.cost), 1]])}</div>
       </div>`);
     main.querySelector('[data-range]').addEventListener('submit', (e) => {
       e.preventDefault();
@@ -1159,8 +1207,20 @@
           </div>
           <small class="muted">Customers can redeem points for a discount when booking. Set points per ${esc(s.currency)}1 to 0 to switch the programme off.</small>
         </div>
+        <div class="card"><h2>Employees</h2>
+          <input type="hidden" name="employee_can_discount" value="false">
+          <label class="check"><input type="checkbox" name="employee_can_discount" value="true" data-single ${s.employee_can_discount ? 'checked' : ''}> Employees may give discounts</label>
+          <small class="muted">Employees sign in with their PIN at <b>/staff</b>. They can take bookings, walk-ins and payments, set the price for the vehicle and record stock used — but cannot see reports, revenue, settings, the price list, staff or customer accounts, or give refunds. Set their PINs on the Staff page.</small>
+        </div>
         <div><button class="btn btn-primary">Save settings</button></div>
       </form>
+      <div class="card" style="margin-top:16px"><h2>Change admin PIN</h2>
+        <form data-pin class="form-row form-row-3" style="align-items:end">
+          <div class="field"><label>Current password</label><input type="password" name="current_password" required></div>
+          <div class="field"><label>New 4-digit PIN</label><input name="pin" inputmode="numeric" pattern="\\d{4}" maxlength="4" required autocomplete="off"></div>
+          <div class="field"><button class="btn">Update PIN</button></div>
+        </form>
+      </div>
       <div class="card" style="margin-top:16px"><h2>Change admin password</h2>
         <form data-password class="form-row form-row-3" style="align-items:end">
           <div class="field"><label>Current password</label><input type="password" name="current_password" required></div>
@@ -1172,10 +1232,21 @@
       e.preventDefault();
       const d = UI.formData(e.target);
       d.open_days = (d.open_days || []).map(Number);
+      d.employee_can_discount = e.target.querySelector('[name=employee_can_discount][type=checkbox]').checked;
       try {
         await api('PUT', '/api/admin/settings', d);
         await UI.loadSettings();
         toast('Settings saved', 'success');
+      } catch (ex) {
+        toast(ex.message, 'error');
+      }
+    });
+    main.querySelector('[data-pin]').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      try {
+        await api('POST', '/api/admin/pin', UI.formData(e.target));
+        e.target.reset();
+        toast('PIN updated', 'success');
       } catch (ex) {
         toast(ex.message, 'error');
       }
@@ -1193,18 +1264,156 @@
   }
 
   // =====================================================================
+  // =====================================================================
+  // Inventory
+  // =====================================================================
+  const INV_CAT = { chemicals: 'Chemicals', polish: 'Polish & compounds', coating: 'Coatings', ppf: 'PPF film', consumables: 'Consumables', tools: 'Tools & equipment', other: 'Other' };
+  const MOVE_LABEL = { purchase: 'Received', use: 'Used', waste: 'Wasted', adjust: 'Stock count' };
+
+  async function inventory(_p, query) {
+    const { items, summary, categories } = await api('GET', '/api/admin/inventory');
+    const f = { q: query.q || '', cat: query.cat || '', low: query.low === '1' };
+    const shown = items.filter(
+      (i) => (!f.q || `${i.name} ${i.supplier || ''}`.toLowerCase().includes(f.q.toLowerCase())) && (!f.cat || i.category === f.cat) && (!f.low || i.low),
+    );
+    const qtyCell = (i) => `<span class="${i.quantity <= 0 ? 'stock-neg' : ''}">${esc(fmtQty(i.quantity))} ${esc(i.unit)}</span>${i.low ? ` <span class="badge ${i.quantity <= 0 ? 'overdue' : 'due_soon'}">${i.quantity <= 0 ? 'Out' : 'Low'}</span>` : ''}`;
+    setPage(`
+      ${pageHead('Inventory', 'Chemicals, polishes, coatings, PPF film and supplies. Materials are taken out of stock automatically when a job is completed.', isAdmin ? '<button class="btn btn-primary" data-add-item>+ Add item</button>' : '')}
+      <div class="grid ${isAdmin ? 'grid-3' : 'grid-2'}">
+        <div class="card stat"><span class="label">Items</span><span class="value">${summary.items}</span></div>
+        <div class="card stat"><span class="label">Low / out of stock</span><span class="value">${summary.low}</span><span class="sub"><a href="#/inventory?low=1">Show them →</a></span></div>
+        ${isAdmin ? `<div class="card stat"><span class="label">Stock value</span><span class="value">${money(summary.value)}</span><span class="sub">at average cost</span></div>` : ''}
+      </div>
+      <div class="card" style="margin-top:16px">
+        <form class="filters" data-filter>
+          <input type="search" name="q" placeholder="Search items or supplier…" value="${esc(f.q)}">
+          <select name="cat"><option value="">All categories</option>${categories.map((c) => `<option value="${c}" ${f.cat === c ? 'selected' : ''}>${esc(INV_CAT[c] || c)}</option>`).join('')}</select>
+          <label class="check"><input type="checkbox" name="low" ${f.low ? 'checked' : ''}> Low stock only</label>
+          <button class="btn">Filter</button>
+        </form>
+        <div class="table-wrap"><table><thead><tr><th>Item</th><th>Category</th><th class="num">In stock</th><th class="num">Reorder at</th>${isAdmin ? '<th class="num">Cost / unit</th><th class="num">Value</th>' : ''}<th></th></tr></thead><tbody>
+        ${
+          shown.length
+            ? shown
+                .map(
+                  (i) => `<tr ${i.active ? '' : 'style="opacity:.55"'}>
+            <td><b>${esc(i.name)}</b>${!i.active ? ' <span class="badge inactive">Archived</span>' : ''}${isAdmin && (i.supplier || i.notes) ? `<div class="muted" style="font-size:.8rem">${esc([i.supplier, i.notes].filter(Boolean).join(' · '))}</div>` : ''}</td>
+            <td><span class="badge">${esc(INV_CAT[i.category] || i.category)}</span></td>
+            <td class="num">${qtyCell(i)}</td>
+            <td class="num">${esc(fmtQty(i.min_quantity))} ${esc(i.unit)}</td>
+            ${isAdmin ? `<td class="num">${money(i.cost_price)}</td><td class="num">${money(i.value)}</td>` : ''}
+            <td class="num"><div class="btn-row inv-actions" style="justify-content:flex-end">
+              <button class="btn btn-sm" data-use="${i.id}">Use</button>
+              ${isAdmin ? `<button class="btn btn-sm btn-success" data-receive="${i.id}">Receive</button><button class="btn btn-sm" data-count="${i.id}">Count</button><button class="btn btn-sm" data-edit-item="${i.id}">Edit</button>` : ''}
+              <button class="btn btn-sm btn-ghost" data-history="${i.id}">History</button>
+            </div></td></tr>`,
+                )
+                .join('')
+            : '<tr><td colspan="7" class="empty">No items match.</td></tr>'
+        }</tbody></table></div>
+      </div>`);
+    const reload = () => inventory(_p, query);
+    const byId = (id) => items.find((i) => i.id === Number(id));
+    main.querySelector('[data-filter]').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const d = UI.formData(e.target);
+      const qs = new URLSearchParams(Object.entries({ q: d.q, cat: d.cat, low: d.low ? '1' : '' }).filter(([, v]) => v));
+      location.hash = `#/inventory${qs.toString() ? `?${qs}` : ''}`;
+    });
+    const moveModal = (i, type) => {
+      const titles = { use: `Record use — ${i.name}`, purchase: `Receive stock — ${i.name}`, adjust: `Stock count — ${i.name}` };
+      modal({
+        title: titles[type],
+        submitLabel: 'Save',
+        body: `<p class="muted" style="margin-top:0">In stock now: <b>${esc(fmtQty(i.quantity))} ${esc(i.unit)}</b></p>
+          ${
+            type === 'use'
+              ? `<div class="form-row"><div class="field"><label>Quantity (${esc(i.unit)})</label><input name="quantity" type="number" min="0" step="any" required></div>
+                 <div class="field"><label>Type</label><select name="type"><option value="use">Used on a job</option><option value="waste">Wasted / damaged</option></select></div></div>
+                 <div class="field"><label>Booking code <small class="muted" style="display:inline">(optional)</small></label><input name="booking_code" placeholder="MC-XXXXXX" style="text-transform:uppercase"></div>`
+              : type === 'purchase'
+                ? `<div class="form-row"><div class="field"><label>Quantity received (${esc(i.unit)})</label><input name="quantity" type="number" min="0" step="any" required></div>
+                   <div class="field"><label>Cost per ${esc(i.unit)} (${esc(UI.state.settings.currency)})</label><input name="unit_cost" type="number" min="0" step="any" value="${esc(i.cost_price)}"></div></div>`
+                : `<div class="field"><label>Counted quantity (${esc(i.unit)})</label><input name="counted" type="number" min="0" step="any" required value="${esc(i.quantity)}"><small class="muted">The stock is set to what you counted; the difference is logged.</small></div>`
+          }
+          <div class="field"><label>Note</label><input name="note" maxlength="200" placeholder="${type === 'purchase' ? 'Supplier / invoice no.' : 'Optional'}"></div>`,
+        onSubmit: async (d) => {
+          await api('POST', `/api/admin/inventory/${i.id}/movements`, { type: d.type || type, ...d });
+          toast('Stock updated', 'success');
+          reload();
+        },
+      });
+    };
+    const itemModal = (i) =>
+      modal({
+        title: i ? `Edit ${i.name}` : 'Add inventory item',
+        body: `<div class="form-row"><div class="field"><label>Name *</label><input name="name" required value="${esc(i?.name)}" placeholder="e.g. Car shampoo"></div>
+            <div class="field"><label>Category</label><select name="category">${categories.map((c) => `<option value="${c}" ${(i?.category || 'chemicals') === c ? 'selected' : ''}>${esc(INV_CAT[c] || c)}</option>`).join('')}</select></div></div>
+          <div class="form-row form-row-3">
+            <div class="field"><label>Unit</label><input name="unit" maxlength="10" value="${esc(i?.unit || 'L')}" placeholder="L, ml, kg, m, pcs"></div>
+            ${i ? '' : '<div class="field"><label>Opening stock</label><input name="quantity" type="number" min="0" step="any" value="0"></div>'}
+            <div class="field"><label>Reorder at</label><input name="min_quantity" type="number" min="0" step="any" value="${esc(i?.min_quantity ?? 0)}"></div>
+            <div class="field"><label>Cost per unit (${esc(UI.state.settings.currency)})</label><input name="cost_price" type="number" min="0" step="any" value="${esc(i?.cost_price ?? 0)}"></div>
+          </div>
+          <div class="form-row"><div class="field"><label>Supplier</label><input name="supplier" value="${esc(i?.supplier)}"></div><div class="field"><label>Notes</label><input name="notes" value="${esc(i?.notes)}"></div></div>
+          ${i ? `<label class="check"><input type="checkbox" name="active" ${i.active ? 'checked' : ''}> Active (untick to archive)</label>` : ''}`,
+        onSubmit: async (d) => {
+          if (i) await api('PATCH', `/api/admin/inventory/${i.id}`, d);
+          else await api('POST', '/api/admin/inventory', d);
+          toast('Item saved', 'success');
+          reload();
+        },
+      });
+    main.querySelector('[data-add-item]')?.addEventListener('click', () => itemModal(null));
+    main.querySelectorAll('[data-use]').forEach((b) => b.addEventListener('click', () => moveModal(byId(b.dataset.use), 'use')));
+    main.querySelectorAll('[data-receive]').forEach((b) => b.addEventListener('click', () => moveModal(byId(b.dataset.receive), 'purchase')));
+    main.querySelectorAll('[data-count]').forEach((b) => b.addEventListener('click', () => moveModal(byId(b.dataset.count), 'adjust')));
+    main.querySelectorAll('[data-edit-item]').forEach((b) => b.addEventListener('click', () => itemModal(byId(b.dataset.editItem))));
+    main.querySelectorAll('[data-history]').forEach((b) =>
+      b.addEventListener('click', async () => {
+        const { item, movements } = await api('GET', `/api/admin/inventory/${b.dataset.history}/movements`);
+        modal({
+          title: `${item.name} — stock history`,
+          wide: true,
+          body: `<p class="muted" style="margin-top:0">In stock: <b>${esc(fmtQty(item.quantity))} ${esc(item.unit)}</b></p>
+            <div class="table-wrap"><table><thead><tr><th>When</th><th>What</th><th class="num">Qty</th>${isAdmin ? '<th class="num">Cost / unit</th>' : ''}<th>Job</th><th>Note</th><th>By</th></tr></thead><tbody>
+            ${
+              movements.length
+                ? movements
+                    .map(
+                      (m) => `<tr><td>${esc(fmtDateTime(m.created_at))}</td><td>${esc(MOVE_LABEL[m.type] || m.type)}</td>
+                  <td class="num ${m.quantity < 0 ? 'stock-neg' : ''}">${m.quantity > 0 ? '+' : ''}${esc(fmtQty(m.quantity))} ${esc(item.unit)}</td>
+                  ${isAdmin ? `<td class="num">${money(m.unit_cost)}</td>` : ''}
+                  <td class="mono">${esc(m.booking_code || '')}</td><td>${esc(m.note || '')}</td><td>${esc(m.actor_name || '')}</td></tr>`,
+                    )
+                    .join('')
+                : '<tr><td colspan="7" class="empty">No movements yet.</td></tr>'
+            }</tbody></table></div>`,
+        });
+      }),
+    );
+  }
+
+  function adminOnly(page) {
+    return isAdmin ? page : () => {
+      toast('Only the admin can open that page.', 'error');
+      location.hash = '#/';
+    };
+  }
+
   UI.router(
     {
       '/': dashboard,
       '/bookings': bookings,
       '/vehicles': vehicles,
       '/vehicles/:id': vehicleDetail,
-      '/customers': customers,
-      '/customers/:id': customerDetail,
-      '/services': services,
-      '/staff': staff,
-      '/reports': reports,
-      '/settings': settings,
+      '/customers': adminOnly(customers),
+      '/customers/:id': adminOnly(customerDetail),
+      '/inventory': inventory,
+      '/services': adminOnly(services),
+      '/staff': adminOnly(staff),
+      '/reports': adminOnly(reports),
+      '/settings': adminOnly(settings),
     },
     { onChange: UI.setActiveNav },
   ).run();

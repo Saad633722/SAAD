@@ -3,12 +3,8 @@
 const crypto = require('node:crypto');
 const { now, today } = require('./db');
 
-class HttpError extends Error {
-  constructor(status, message) {
-    super(message);
-    this.status = status;
-  }
-}
+const { HttpError } = require('./errors');
+const inventory = require('./inventory');
 
 const VEHICLE_TYPES = ['sedan', 'hatchback', 'coupe', 'suv', 'pickup', 'van', 'motorbike'];
 const LARGE_TYPES = new Set(['suv', 'pickup', 'van']);
@@ -525,7 +521,10 @@ function changeStatus(db, booking, next, { actorName, note, enforceTransitions =
       }
     }
     db.run(`UPDATE bookings SET ${sets.join(', ')} WHERE id = ?`, ...vals, booking.id);
-    if (next === 'completed') recordProtections(db, booking.id, ts);
+    if (next === 'completed') {
+      recordProtections(db, booking.id, ts);
+      inventory.deductForBooking(db, booking.id, actorName);
+    }
     addEvent(db, booking.id, next, note, actorName);
   });
 }

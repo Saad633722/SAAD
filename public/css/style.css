@@ -403,3 +403,24 @@ dl.kv dd { margin: 0; font-weight: 500; }
 .balance { display: flex; justify-content: space-between; align-items: center; font-weight: 700; padding: 8px 12px; border-radius: 8px; background: var(--warning-soft); color: var(--warning); margin-bottom: 10px; }
 .balance.settled { background: var(--success-soft); color: var(--success); }
 @media (max-width: 600px) { .pay-row { grid-template-columns: 1fr 1fr 34px; } .pay-row .ref { grid-column: 1 / 3; } .line-edit { grid-template-columns: 1fr 100px 34px; } }
+
+/* ---------- PIN pad ---------- */
+.pin-dots { display: flex; justify-content: center; gap: 16px; margin: 8px 0 20px; }
+.pin-dots span { width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--primary); }
+.pin-dots span.on { background: var(--primary); }
+.pin-dots.shake { animation: shake 0.35s; }
+@keyframes shake { 25% { transform: translateX(-8px); } 75% { transform: translateX(8px); } }
+.keypad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; max-width: 300px; margin: 0 auto; }
+.keypad button { font: inherit; font-size: 1.5rem; font-weight: 600; padding: 14px 0; border-radius: 12px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); cursor: pointer; }
+.keypad button:active { background: var(--primary-soft); }
+body.role-employee a[href^="#/customers"] { pointer-events: none; color: inherit; }
+.stock-neg { color: var(--danger); font-weight: 700; }
+
+/* Shop tablet (/staff): only the PIN pad */
+.staff-brand { display: none; }
+.staff-mode .hero { display: none; }
+.staff-mode .landing { grid-template-columns: 1fr; background: var(--sidebar); }
+.staff-mode .auth { min-height: 100vh; }
+.staff-mode .staff-brand { display: flex; justify-content: center; color: var(--text); padding: 0 0 18px; }
+.staff-mode .staff-brand .logo { width: 64px; background: #2b2425; border-radius: 12px; padding: 8px; }
+.inv-actions { flex-wrap: nowrap; }

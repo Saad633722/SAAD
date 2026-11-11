@@ -36,9 +36,20 @@ function parseCookies(header) {
   return out;
 }
 
-function createSession(db, res, userId, { secure } = {}) {
+/**
+ * PINs are hashed with a keyed HMAC (secret stored in the database) so a PIN can be
+ * looked up directly. A 4-digit PIN is short, so the PIN endpoint is strictly rate-limited.
+ */
+function pinHash(secret, pin) {
+  return crypto.createHmac('sha256', secret).update(`pin:${pin}`).digest('hex');
+}
+
+const PIN_RE = /^\d{4}$/;
+
+/** userId for admins/customers; staffId for employees signed in with a PIN. */
+function createSession(db, res, userId, { secure, staffId = null } = {}) {
   const token = crypto.randomBytes(32).toString('hex');
-  db.run('INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)', token, userId, Date.now() + SESSION_TTL_MS);
+  db.run('INSERT INTO sessions (token, user_id, staff_id, expires_at) VALUES (?, ?, ?, ?)', token, staffId ? null : userId, staffId, Date.now() + SESSION_TTL_MS);
   res.cookie(SESSION_COOKIE, token, {
     httpOnly: true,
     sameSite: 'lax',
@@ -61,27 +72,29 @@ function loadUser(db) {
     req.user = null;
     const token = parseCookies(req.headers.cookie)[SESSION_COOKIE];
     if (token) {
-      const row = db.get(
-        `SELECT u.id, u.name, u.email, u.phone, u.role, u.loyalty_points, u.active, s.expires_at
-           FROM sessions s JOIN users u ON u.id = s.user_id
-          WHERE s.token = ?`,
-        token,
-      );
-      if (row && row.expires_at > Date.now() && row.active) {
-        delete row.expires_at;
-        req.user = row;
-      } else if (row) {
-        db.run('DELETE FROM sessions WHERE token = ?', token);
+      const s = db.get('SELECT user_id, staff_id, expires_at FROM sessions WHERE token = ?', token);
+      let user = null;
+      if (s && s.expires_at > Date.now()) {
+        if (s.user_id) {
+          const u = db.get('SELECT id, name, email, phone, role, loyalty_points, active FROM users WHERE id = ?', s.user_id);
+          if (u && u.active) user = u;
+        } else if (s.staff_id) {
+          const st = db.get('SELECT id, name, phone, position, active, pin_hash FROM staff WHERE id = ?', s.staff_id);
+          if (st && st.active && st.pin_hash) user = { id: st.id, staff_id: st.id, name: st.name, email: null, phone: st.phone, position: st.position, role: 'employee', active: 1 };
+        }
       }
+      if (user) req.user = user;
+      else if (s) db.run('DELETE FROM sessions WHERE token = ?', token);
     }
     next();
   };
 }
 
 function requireRole(role) {
+  const roles = Array.isArray(role) ? role : [role];
   return (req, res, next) => {
     if (!req.user) return res.status(401).json({ error: 'Please log in.' });
-    if (role && req.user.role !== role) return res.status(403).json({ error: 'You do not have access to this area.' });
+    if (role && !roles.includes(req.user.role)) return res.status(403).json({ error: 'You do not have access to this area.' });
     next();
   };
 }
@@ -105,7 +118,31 @@ function rateLimit({ windowMs = 15 * 60 * 1000, max = 20 } = {}) {
   };
 }
 
+/**
+ * Limits wrong attempts only (successful sign-ins don't count), so a busy shop
+ * tablet isn't locked out, while guessing a 4-digit PIN stays impractical.
+ */
+function failureLimiter({ windowMs = 10 * 60 * 1000, max = 10 } = {}) {
+  const fails = new Map();
+  const entry = (req) => {
+    const e = fails.get(req.ip);
+    return e && e.reset > Date.now() ? e : null;
+  };
+  return {
+    blocked: (req) => (entry(req)?.count || 0) >= max,
+    fail(req) {
+      const e = entry(req) || { count: 0, reset: Date.now() + windowMs };
+      e.count += 1;
+      fails.set(req.ip, e);
+    },
+    ok: (req) => fails.delete(req.ip),
+  };
+}
+
 module.exports = {
+  failureLimiter,
+  pinHash,
+  PIN_RE,
   hashPassword,
   verifyPassword,
   createSession,

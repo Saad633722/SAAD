@@ -1,7 +1,8 @@
 'use strict';
 
 const express = require('express');
-const { hashPassword, verifyPassword } = require('../auth');
+const { hashPassword, verifyPassword, pinHash, PIN_RE } = require('../auth');
+const inv = require('../inventory');
 const B = require('../bookings');
 const { now, today, DEFAULT_SETTINGS } = require('../db');
 
@@ -26,8 +27,58 @@ function csvCell(v) {
   return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
+// What an employee (signed in with a PIN) may do. Everything else here is admin-only:
+// reports, settings, services & prices catalogue, staff, customer accounts, refunds, deleting records.
+const EMPLOYEE_ALLOWED = [
+  ['GET', /^\/stats$/],
+  ['GET', /^\/bookings$/],
+  ['POST', /^\/bookings$/],
+  ['GET', /^\/bookings\/\d+$/],
+  ['PATCH', /^\/bookings\/\d+$/],
+  ['PUT', /^\/bookings\/\d+\/pricing$/],
+  ['POST', /^\/bookings\/\d+\/payments$/],
+  ['GET', /^\/vehicles$/],
+  ['GET', /^\/vehicles\/\d+$/],
+  ['POST', /^\/vehicles$/],
+  ['PATCH', /^\/vehicles\/\d+$/],
+  ['POST', /^\/vehicles\/\d+\/notes$/],
+  ['GET', /^\/followups$/],
+  ['GET', /^\/customers$/],
+  ['GET', /^\/services$/],
+  ['GET', /^\/staff$/],
+];
+
 module.exports = function adminRoutes(db) {
   const r = express.Router();
+  const isEmployee = (req) => req.user.role === 'employee';
+
+  r.use((req, res, next) => {
+    if (!isEmployee(req)) return next();
+    if (EMPLOYEE_ALLOWED.some(([m, re]) => m === req.method && re.test(req.path))) return next();
+    res.status(403).json({ error: 'Only the admin can do this.' });
+  });
+
+  /** Employees may give discounts only when the admin allows it in Settings. */
+  const checkDiscount = (req, current = 0) => {
+    if (!isEmployee(req) || db.getSettings().employee_can_discount) return;
+    if (req.body.discount_value === undefined && req.body.discount === undefined) return;
+    const v = Number(req.body.discount_value ?? req.body.discount ?? 0) || 0;
+    if (v !== Number(current || 0)) throw new HttpError(403, 'Only the admin can give discounts.');
+    delete req.body.discount_value;
+    delete req.body.discount_type;
+    delete req.body.discount_reason;
+  };
+
+  const staffRow = ({ pin_hash: pinHashValue, ...st }) => ({ ...st, has_pin: Boolean(pinHashValue) });
+  /** A PIN must be 4 digits and not used by anyone else (admin or another employee). */
+  const pinFor = (pin, staffId) => {
+    if (!PIN_RE.test(String(pin))) throw new HttpError(400, 'PIN must be exactly 4 digits.');
+    const hash = pinHash(db.pinSecret(), String(pin));
+    if (db.get("SELECT 1 FROM users WHERE role = 'admin' AND pin_hash = ?", hash) || db.get('SELECT 1 FROM staff WHERE pin_hash = ? AND id <> ?', hash, staffId || 0)) {
+      throw new HttpError(409, 'That PIN is already in use. Choose another.');
+    }
+    return hash;
+  };
 
   const getBooking = (id) => {
     const b = db.get('SELECT * FROM bookings WHERE id = ?', int(id));
@@ -41,7 +92,7 @@ module.exports = function adminRoutes(db) {
   };
 
   // ---------- Dashboard ----------
-  r.get('/stats', (_req, res) => {
+  r.get('/stats', (req, res) => {
     const t = today();
     const month = t.slice(0, 7);
     const todayCounts = db.get(
@@ -105,7 +156,19 @@ module.exports = function adminRoutes(db) {
         WHERE b.rating IS NOT NULL ORDER BY b.completed_at DESC LIMIT 5`,
     );
 
+    const low_stock = inv.listItems(db).filter((i) => i.low).map(({ id, name, quantity, unit, min_quantity: minQ }) => ({ id, name, quantity, unit, min_quantity: minQ }));
+    if (isEmployee(req)) {
+      // no money figures for employees
+      return res.json({
+        today: todayCounts,
+        totals: { pending_total: totals.pending_total },
+        queue, // per-job prices are needed at the counter
+        followups: B.followUps(db),
+        low_stock,
+      });
+    }
     res.json({
+      low_stock,
       today: { ...todayCounts, revenue: round2(revenueToday) },
       month: { revenue: round2(revenueMonth) },
       unpaid: { count: unpaid.c, amount: round2(unpaid.v) },
@@ -195,6 +258,7 @@ module.exports = function adminRoutes(db) {
       if (!m) throw new HttpError(400, 'Invalid date/time.');
       scheduledAt = `${m[1]} ${m[2]}`;
     }
+    checkDiscount(req);
     const id = B.createBooking(db, {
       vehicle,
       customerId,
@@ -268,6 +332,7 @@ module.exports = function adminRoutes(db) {
   // Manual prices, extra/custom items and discounts.
   r.put('/bookings/:id/pricing', (req, res) => {
     const b = getBooking(req.params.id);
+    checkDiscount(req, b.manual_discount ? b.discount_value || b.manual_discount : 0);
     B.repriceBooking(db, b, req.body, req.user.name);
     const detail = B.bookingDetail(db, b.id);
     res.json({ booking: detail, transitions: B.TRANSITIONS[detail.status] });
@@ -277,6 +342,7 @@ module.exports = function adminRoutes(db) {
   r.post('/bookings/:id/payments', (req, res) => {
     const b = getBooking(req.params.id);
     const list = Array.isArray(req.body.payments) ? req.body.payments : [req.body];
+    if (isEmployee(req) && list.some((p) => Number(p.amount) < 0)) throw new HttpError(403, 'Only the admin can record refunds.');
     B.addPayments(db, b, list, req.user.name);
     const detail = B.bookingDetail(db, b.id);
     res.status(201).json({ booking: detail, transitions: B.TRANSITIONS[detail.status] });
@@ -462,7 +528,7 @@ module.exports = function adminRoutes(db) {
          FROM users u ${where} ORDER BY u.created_at DESC LIMIT 500`,
       ...params,
     );
-    res.json({ customers });
+    res.json({ customers: isEmployee(req) ? customers.map(({ id, name, email, phone, active }) => ({ id, name, email, phone, active })) : customers });
   });
 
   r.post('/customers', (req, res) => {
@@ -623,7 +689,7 @@ module.exports = function adminRoutes(db) {
   });
 
   // ---------- Staff ----------
-  r.get('/staff', (_req, res) => {
+  r.get('/staff', (req, res) => {
     const t = today();
     res.json({
       staff: db.all(
@@ -634,15 +700,18 @@ module.exports = function adminRoutes(db) {
                 (SELECT COUNT(*) FROM bookings b WHERE b.staff_id = s.id AND b.status = 'in_progress') AS busy
            FROM staff s ORDER BY s.active DESC, s.name`,
         t,
-      ),
+      )
+        .map(staffRow)
+        .map((st) => (isEmployee(req) ? { id: st.id, name: st.name, position: st.position, active: st.active, busy: st.busy } : st)),
     });
   });
 
   r.post('/staff', (req, res) => {
     const name = str(req.body.name, 80);
     if (!name) throw new HttpError(400, 'Name is required.');
-    const { id } = db.run('INSERT INTO staff (name, phone, position, active, created_at) VALUES (?, ?, ?, 1, ?)', name, str(req.body.phone, 30), str(req.body.position, 60), now());
-    res.status(201).json({ staff: db.get('SELECT * FROM staff WHERE id = ?', id) });
+    const pin = req.body.pin ? pinFor(req.body.pin) : null;
+    const { id } = db.run('INSERT INTO staff (name, phone, position, active, pin_hash, created_at) VALUES (?, ?, ?, 1, ?, ?)', name, str(req.body.phone, 30), str(req.body.position, 60), pin, now());
+    res.status(201).json({ staff: staffRow(db.get('SELECT * FROM staff WHERE id = ?', id)) });
   });
 
   r.patch('/staff/:id', (req, res) => {
@@ -658,7 +727,10 @@ module.exports = function adminRoutes(db) {
       req.body.active !== undefined ? (req.body.active ? 1 : 0) : s.active,
       s.id,
     );
-    res.json({ staff: db.get('SELECT * FROM staff WHERE id = ?', s.id) });
+    // pin: '1234' sets it, null / '' removes PIN sign-in for this person
+    if (req.body.pin !== undefined) db.run('UPDATE staff SET pin_hash = ? WHERE id = ?', req.body.pin ? pinFor(req.body.pin, s.id) : null, s.id);
+    if (req.body.pin !== undefined || req.body.active === false || req.body.active === 0) db.run('DELETE FROM sessions WHERE staff_id = ?', s.id);
+    res.json({ staff: staffRow(db.get('SELECT * FROM staff WHERE id = ?', s.id)) });
   });
 
   r.delete('/staff/:id', (req, res) => {
@@ -755,7 +827,21 @@ module.exports = function adminRoutes(db) {
       from,
       to,
     );
-    res.json({ from, to, summary, by_day, by_category, by_service, by_addon, by_staff, by_payment, by_hour, by_vehicle_type });
+    const materials = db.all(
+      `SELECT i.id, i.name, i.unit, ROUND(-SUM(m.quantity), 3) AS quantity, ROUND(-SUM(m.quantity * m.unit_cost), 2) AS cost
+         FROM inventory_movements m JOIN inventory_items i ON i.id = m.item_id
+        WHERE m.type IN ('use', 'waste') AND substr(m.created_at, 1, 10) BETWEEN ? AND ?
+        GROUP BY i.id ORDER BY cost DESC`,
+      from,
+      to,
+    );
+    summary.materials_cost = Math.round(materials.reduce((sum, m) => sum + m.cost, 0) * 100) / 100;
+    summary.purchases = db.get(
+      `SELECT ROUND(COALESCE(SUM(quantity * unit_cost), 0), 2) AS v FROM inventory_movements WHERE type = 'purchase' AND substr(created_at, 1, 10) BETWEEN ? AND ?`,
+      from,
+      to,
+    ).v;
+    res.json({ from, to, summary, by_day, by_category, by_service, by_addon, by_staff, by_payment, by_hour, by_vehicle_type, materials });
   });
 
   r.get('/reports/bookings.csv', (req, res) => {
@@ -838,6 +924,8 @@ module.exports = function adminRoutes(db) {
       } else if (key === 'open_time' || key === 'close_time') {
         if (!/^\d{2}:\d{2}$/.test(body[key])) throw new HttpError(400, 'Times must be in HH:MM format.');
         updates[key] = body[key];
+      } else if (key === 'employee_can_discount') {
+        updates[key] = body[key] === true || body[key] === 'true' || body[key] === 'on';
       } else if (key === 'payment_methods') {
         updates[key] = body[key];
       } else if (key === 'open_days') {
@@ -853,6 +941,19 @@ module.exports = function adminRoutes(db) {
       for (const [k, v] of Object.entries(updates)) db.setSetting(k, v);
     });
     res.json({ settings: db.getSettings() });
+  });
+
+  // Admin's own PIN (for quick sign-in on the shop tablet)
+  r.post('/pin', (req, res) => {
+    const u = db.get('SELECT * FROM users WHERE id = ?', req.user.id);
+    if (!verifyPassword(req.body.current_password || '', u.password_hash)) throw new HttpError(400, 'Current password is incorrect.');
+    if (!PIN_RE.test(String(req.body.pin || ''))) throw new HttpError(400, 'PIN must be exactly 4 digits.');
+    const hash = pinHash(db.pinSecret(), String(req.body.pin));
+    if (db.get('SELECT 1 FROM staff WHERE pin_hash = ?', hash) || db.get("SELECT 1 FROM users WHERE role = 'admin' AND pin_hash = ? AND id <> ?", hash, u.id)) {
+      throw new HttpError(409, 'That PIN is already used by an employee. Choose another.');
+    }
+    db.run('UPDATE users SET pin_hash = ? WHERE id = ?', hash, u.id);
+    res.json({ ok: true });
   });
 
   // Admin's own password

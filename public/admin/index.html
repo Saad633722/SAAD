@@ -10,16 +10,17 @@
 <body>
   <div class="layout">
     <aside class="sidebar">
-      <div class="brand"><span class="logo" data-logo></span><span class="brand-text"><b data-business-name>Mr.Clean Car Detailing</b><small data-tagline>&amp; PPF Ceramic Coating</small><span class="brand-badge">ADMIN</span></span></div>
+      <div class="brand"><span class="logo" data-logo></span><span class="brand-text"><b data-business-name>Mr.Clean Car Detailing</b><small data-tagline>&amp; PPF Ceramic Coating</small><span class="brand-badge" data-role-badge>ADMIN</span></span></div>
       <nav class="nav">
         <a href="#/"><span class="icon">📊</span> Dashboard</a>
         <a href="#/bookings"><span class="icon">📅</span> Bookings</a>
         <a href="#/vehicles"><span class="icon">🚗</span> Vehicles &amp; history</a>
-        <a href="#/customers"><span class="icon">👥</span> Customers</a>
-        <a href="#/services"><span class="icon">🧽</span> Services &amp; pricing</a>
-        <a href="#/staff"><span class="icon">🧑‍🔧</span> Staff</a>
-        <a href="#/reports"><span class="icon">📈</span> Reports</a>
-        <a href="#/settings"><span class="icon">⚙️</span> Settings</a>
+        <a href="#/customers" data-admin-only><span class="icon">👥</span> Customers</a>
+        <a href="#/inventory"><span class="icon">📦</span> Inventory</a>
+        <a href="#/services" data-admin-only><span class="icon">🧽</span> Services &amp; pricing</a>
+        <a href="#/staff" data-admin-only><span class="icon">🧑‍🔧</span> Staff</a>
+        <a href="#/reports" data-admin-only><span class="icon">📈</span> Reports</a>
+        <a href="#/settings" data-admin-only><span class="icon">⚙️</span> Settings</a>
       </nav>
       <div class="sidebar-footer">
         <div class="who" data-user-name></div>

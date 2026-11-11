@@ -3,6 +3,8 @@
 The booking and management web app for **Mr.Clean Car Detailing & PPF Ceramic Coating**. It has two panels:
 
 - **Admin panel** (`/admin`): runs the shop. It keeps a **full history for every car**, including ceramic coating and PPF warranties.
+- **Employee view** of the same panel: staff sign in with a **4-digit PIN** on the shop tablet (`/staff`) and see only what they need on the floor.
+- **Inventory**: chemicals, polishes, coatings, PPF film and supplies, deducted automatically as jobs are completed.
 - **Customer panel** (`/app`): customers register, add their cars, book services, follow the job while it's in the shop, and see their car's history and warranties.
 
 It is built with Node.js, Express and SQLite (the `node:sqlite` module that ships with Node). The frontend is plain HTML, CSS and JS, so there is no build step and only one npm dependency.
@@ -21,6 +23,16 @@ npm start           # http://localhost:3000
 
 Sign in at <http://localhost:3000>. The app sends each user to the right panel for their role.
 
+**Staff PIN pad** — open <http://localhost:3000/staff> on the shop tablet:
+
+| Who | PIN |
+|-----|-----|
+| Admin | `2222` |
+| Employee (Alex Carter) | `1111` |
+| Employee (Sam Lee, demo data only) | `3333` |
+
+Change the admin PIN in **Settings**. Set each employee's PIN on the **Staff** page (every PIN must be different, so the app knows who took each job and payment).
+
 | Role     | Email                 | Password   |
 |----------|-----------------------|------------|
 | Admin    | `admin@mrclean.local` | `admin123` |
@@ -37,6 +49,34 @@ Sign in at <http://localhost:3000>. The app sends each user to the right panel f
 - **Multi-day jobs**: a PPF or coating job keeps its bay until it's done, over several days if needed. Online booking only offers drop-off times when a bay is free for the **whole** job, and every booking shows when the car will be **ready**.
 - **Warranties and maintenance**: when a coating or PPF job is completed, the car automatically gets a protection record with the applied date, warranty end date and next maintenance visit. Older work can be added by hand.
 - **Follow-ups**: the admin dashboard lists cars whose maintenance visit is due or overdue, and warranties ending within 30 days. Each one shows the owner's phone number and a one-click "Book visit". Customers see the same reminder on their home page.
+
+### Admin vs employee
+| | Admin (PIN 2222 or email + password) | Employee (own PIN) |
+|---|---|---|
+| Dashboard queue, follow-ups, low stock | ✅ | ✅ |
+| Revenue, money collected, charts, feedback | ✅ | — |
+| Bookings, walk-ins, status, staff & bay | ✅ | ✅ |
+| Set the price for the vehicle | ✅ | ✅ |
+| Discounts | ✅ | only if allowed in Settings |
+| Take payments (split across methods) | ✅ | ✅ |
+| Refunds, deleting payments | ✅ | — |
+| Vehicles & history, notes | ✅ | ✅ (no deleting, no warranty records) |
+| Inventory: see stock, record use / waste | ✅ | ✅ (no costs) |
+| Inventory: receive stock, stock counts, items, costs | ✅ | — |
+| Customers, Services & pricing, Staff, Reports, Settings | ✅ | — |
+
+Employees are restricted on the server (an allowlist of what they may do), not just hidden in the menu. Wrong PINs are rate-limited: 10 wrong tries locks PIN sign-in for 10 minutes. Signing out returns to the PIN pad.
+
+### Inventory
+- Starter stock list for a wash / detailing / coating / PPF shop: shampoo, snow foam, APC, glass cleaner, degreaser, diesel, tire dressing, leather conditioner, clay bars, compound, polish, ceramic and glass coating kits, PPF film (metres), microfiber towels and pads. Quantities and costs are examples.
+- **Receive** (purchases update the average cost), **Use / Waste** (can be linked to a booking code), **Count** (set stock to the physical count), with a full history per item showing who did what.
+- **Reorder levels**: low and out-of-stock items show on the dashboard and inventory page.
+- **Materials per service** (Services & pricing → edit a service): e.g. a 3-year ceramic coating uses 1 coating kit + 0.15 L compound + 0.1 L polish. These are taken out of stock automatically when the job is completed.
+- Reports show the materials used and their cost, stock bought, and revenue minus materials for any period.
+
+| Employee view | Inventory | PIN pad |
+|---|---|---|
+| ![Employee](docs/screenshots/employee-dashboard.png) | ![Inventory](docs/screenshots/admin-inventory.png) | ![PIN](docs/screenshots/staff-pin.png) |
 
 ### Pricing, discounts and payments
 - **Manual prices**: prices depend on the vehicle (see the rate list), so staff can set the package price when booking a walk-in, and later change any line on the bill with **Price & discount**. They can also remove extras, add catalog extras, or add **custom items** such as "Shampoo (charged separately)".
@@ -89,6 +129,8 @@ Environment variables (all optional):
 | `ADMIN_EMAIL`     | `admin@mrclean.local`| Admin account created on first start |
 | `ADMIN_PASSWORD`  | `admin123`           | Its password (first start only) |
 | `ADMIN_NAME`      | `Administrator`      | Its display name |
+| `ADMIN_PIN`       | `2222`               | Admin PIN (first start only) |
+| `EMPLOYEE_PIN`    | `1111`               | PIN of the first employee (first start only) |
 | `SECURE_COOKIES`  | `false`              | Set `true` when served over HTTPS |
 | `TRUST_PROXY`     | –                    | Express `trust proxy` setting when behind a reverse proxy |
 
@@ -124,7 +166,7 @@ test/api.test.js       API tests (node:test)
 npm test
 ```
 
-The tests cover manual prices, discounts, split payments and refunds, multi-day bay scheduling, warranty and maintenance tracking, follow-ups, database upgrades, authentication and role protection, vehicle ownership, pricing and surcharges, slot capacity, the booking lifecycle, loyalty points (earning, redeeming and refunding), walk-in history being claimed by a customer, the vehicle history endpoint, reports and CSV export, and admin CRUD.
+The tests cover PIN sign-in, employee restrictions, inventory (purchases, usage, counts, automatic deduction), manual prices, discounts, split payments and refunds, multi-day bay scheduling, warranty and maintenance tracking, follow-ups, database upgrades, authentication and role protection, vehicle ownership, pricing and surcharges, slot capacity, the booking lifecycle, loyalty points (earning, redeeming and refunding), walk-in history being claimed by a customer, the vehicle history endpoint, reports and CSV export, and admin CRUD.
 
 ## Security notes
 - Passwords are hashed with scrypt. Sessions are random tokens stored server-side in an `HttpOnly`, `SameSite=Lax` cookie.
