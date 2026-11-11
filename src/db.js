@@ -77,12 +77,17 @@ CREATE TABLE IF NOT EXISTS bookings (
   subtotal          REAL NOT NULL DEFAULT 0,
   surcharge         REAL NOT NULL DEFAULT 0,
   discount          REAL NOT NULL DEFAULT 0,
+  manual_discount   REAL NOT NULL DEFAULT 0,
+  discount_type     TEXT NOT NULL DEFAULT 'amount',
+  discount_value    REAL NOT NULL DEFAULT 0,
+  discount_reason   TEXT,
   tax               REAL NOT NULL DEFAULT 0,
   total             REAL NOT NULL DEFAULT 0,
   points_redeemed   INTEGER NOT NULL DEFAULT 0,
   points_earned     INTEGER NOT NULL DEFAULT 0,
   payment_status    TEXT NOT NULL DEFAULT 'unpaid',
   payment_method    TEXT,
+  amount_paid       REAL NOT NULL DEFAULT 0,
   customer_notes    TEXT,
   admin_notes       TEXT,
   mileage           INTEGER,
@@ -139,6 +144,19 @@ CREATE TABLE IF NOT EXISTS vehicle_protections (
   created_at          TEXT NOT NULL
 );
 
+-- Payments against a booking. A bill can be paid in parts and with several
+-- methods (e.g. part cash, part JazzCash). Refunds are negative amounts.
+CREATE TABLE IF NOT EXISTS payments (
+  id           INTEGER PRIMARY KEY,
+  booking_id   INTEGER NOT NULL REFERENCES bookings(id) ON DELETE CASCADE,
+  amount       REAL NOT NULL,
+  method       TEXT NOT NULL,
+  reference    TEXT,
+  note         TEXT,
+  received_by  TEXT,
+  created_at   TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS settings (
   key    TEXT PRIMARY KEY,
   value  TEXT NOT NULL
@@ -151,6 +169,7 @@ CREATE INDEX IF NOT EXISTS idx_bookings_status     ON bookings(status);
 CREATE INDEX IF NOT EXISTS idx_events_booking      ON booking_events(booking_id);
 CREATE INDEX IF NOT EXISTS idx_vehicles_owner      ON vehicles(owner_id);
 CREATE INDEX IF NOT EXISTS idx_protections_vehicle ON vehicle_protections(vehicle_id);
+CREATE INDEX IF NOT EXISTS idx_payments_booking    ON payments(booking_id);
 `;
 
 // Columns added after the first release. Existing databases get them on start-up.
@@ -159,14 +178,20 @@ const MIGRATIONS = [
   ['services', 'warranty_months', 'INTEGER'],
   ['services', 'maintenance_months', 'INTEGER'],
   ['bookings', 'service_category', 'TEXT'],
+  ['bookings', 'manual_discount', 'REAL NOT NULL DEFAULT 0'],
+  ['bookings', 'discount_reason', 'TEXT'],
+  ['bookings', 'amount_paid', 'REAL NOT NULL DEFAULT 0'],
+  ['bookings', 'discount_type', "TEXT NOT NULL DEFAULT 'amount'"],
+  ['bookings', 'discount_value', 'REAL NOT NULL DEFAULT 0'],
 ];
 
 const DEFAULT_SETTINGS = {
   business_name: 'Mr.Clean Car Detailing',
   tagline: '& PPF Ceramic Coating',
   phone: '',
-  address: '',
-  currency: '$',
+  address: 'Rawalpindi / Islamabad',
+  currency: 'Rs',
+  payment_methods: ['Cash', 'Card', 'JazzCash', 'Easypaisa', 'Bank transfer'],
   tax_rate: 0, // percent
   open_time: '08:00',
   close_time: '18:00',
@@ -174,33 +199,35 @@ const DEFAULT_SETTINGS = {
   bays: 3, // how many cars can be worked on at the same time
   open_days: [1, 2, 3, 4, 5, 6], // 0 = Sunday
   booking_window_days: 30,
-  large_vehicle_surcharge: 20, // percent, applied to SUV / pickup / van
-  points_per_unit: 1, // loyalty points earned per 1 currency unit spent
-  reward_points: 500, // points needed for one reward
-  reward_value: 25, // currency value of one reward
+  large_vehicle_surcharge: 50, // percent, applied to SUV / pickup / van (rate list: Rs 700 car vs Rs 1,000–1,200 SUV)
+  points_per_unit: 0.1, // loyalty points earned per 1 currency unit spent (10 points per Rs 100)
+  reward_points: 100, // points needed for one reward
+  reward_value: 50, // currency value of one reward
 };
 
 // Starter price list. Everything here can be edited under "Services & pricing".
 // [name, description, price, duration (working minutes), kind, category, warranty months, maintenance every N months]
 const DEFAULT_SERVICES = [
-  ['Exterior Wash', 'Snow-foam pre-wash, hand wash, wheels and spot-free dry.', 15, 30, 'package', 'wash', null, null],
-  ['Wash & Vacuum', 'Exterior hand wash plus interior vacuum, dashboard wipe-down and glass.', 25, 60, 'package', 'wash', null, null],
-  ['Interior Detailing', 'Deep vacuum, seat and carpet shampoo, leather care, dashboard, vents and door panels.', 90, 240, 'package', 'detailing', null, null],
-  ['Exterior Detailing', 'Iron and tar decontamination, clay bar, machine polish and paint sealant.', 120, 300, 'package', 'detailing', null, null],
-  ['Full Car Detailing', 'Complete interior and exterior detailing for a showroom finish.', 190, 480, 'package', 'detailing', null, null],
-  ['Paint Correction', 'Multi-stage machine polishing to remove swirl marks, holograms and light scratches.', 300, 600, 'package', 'detailing', null, null],
-  ['Ceramic Coating – 1 Year', 'Decontamination, one-step polish and a 1-year ceramic coating for gloss and easy cleaning.', 350, 480, 'package', 'ceramic', 12, 3],
-  ['Ceramic Coating – 3 Years', 'Paint correction and a 3-year 9H ceramic coating on paint and trims.', 750, 900, 'package', 'ceramic', 36, 6],
-  ['Ceramic Coating – 5 Years', 'Two-stage paint correction and a multi-layer 5-year ceramic coating.', 1200, 1200, 'package', 'ceramic', 60, 6],
-  ['PPF – Front Package', 'Self-healing clear paint protection film on front bumper, hood, fenders and mirrors.', 1200, 900, 'package', 'ppf', 60, 12],
-  ['PPF – Full Body', 'Every painted panel wrapped in self-healing, stone-chip resistant clear film.', 4500, 2400, 'package', 'ppf', 120, 12],
-  ['Engine Bay Cleaning', 'Safe degrease and dressing of the engine bay.', 30, 45, 'addon', 'detailing', null, null],
-  ['Headlight Restoration', 'Removes yellowing and haze, finished with UV protection.', 40, 60, 'addon', 'detailing', null, null],
-  ['Leather Conditioning', 'Cleans and nourishes leather seats and trims.', 25, 30, 'addon', 'detailing', null, null],
-  ['Odor Removal', 'Ozone treatment to eliminate smells.', 30, 45, 'addon', 'detailing', null, null],
-  ['Glass Ceramic Coating', 'Hydrophobic coating on all windows for better visibility in the rain.', 60, 45, 'addon', 'ceramic', 12, null],
-  ['Wheel & Caliper Coating', 'Ceramic coating for wheels and calipers so brake dust wipes right off.', 120, 90, 'addon', 'ceramic', 12, null],
-  ['Tire Shine', 'Long-lasting tire dressing.', 5, 10, 'addon', 'wash', null, null],
+  // Wash / service: standard-car prices from the Star Workers Service Station Union rate list (Rawalpindi/Islamabad).
+  ['Wash', 'Body wash with shampoo, wheels and dry.', 500, 30, 'package', 'wash', null, null],
+  ['Service', 'Full service: wash, underbody wash, interior vacuum, dashboard and glass.', 700, 60, 'package', 'wash', null, null],
+  ['Simple Polish', 'Machine polish for gloss and light swirl removal.', 3000, 120, 'package', 'detailing', null, null],
+  ['Interior Detailing', 'Deep vacuum, seat and carpet shampoo, leather care, dashboard, vents and door panels.', 6000, 240, 'package', 'detailing', null, null],
+  ['Exterior Detailing', 'Iron and tar decontamination, clay bar, machine polish and paint sealant.', 8000, 300, 'package', 'detailing', null, null],
+  ['Full Car Detailing', 'Complete interior and exterior detailing for a showroom finish.', 12000, 480, 'package', 'detailing', null, null],
+  ['Compound Polish / Paint Correction', 'Multi-stage compound and polish to remove swirl marks and light scratches.', 15000, 600, 'package', 'detailing', null, null],
+  ['Ceramic Coating – 1 Year', 'Decontamination, one-step polish and a 1-year ceramic coating for gloss and easy cleaning.', 25000, 480, 'package', 'ceramic', 12, 3],
+  ['Ceramic Coating – 3 Years', 'Paint correction and a 3-year 9H ceramic coating on paint and trims.', 45000, 900, 'package', 'ceramic', 36, 6],
+  ['Ceramic Coating – 5 Years', 'Two-stage paint correction and a multi-layer 5-year ceramic coating.', 70000, 1200, 'package', 'ceramic', 60, 6],
+  ['PPF – Front Package', 'Self-healing clear paint protection film on front bumper, bonnet, fenders and mirrors.', 85000, 900, 'package', 'ppf', 60, 12],
+  ['PPF – Full Body', 'Every painted panel wrapped in self-healing, stone-chip resistant clear film.', 350000, 2400, 'package', 'ppf', 120, 12],
+  ['Engine Bay Cleaning', 'Safe degrease and dressing of the engine bay.', 1500, 45, 'addon', 'detailing', null, null],
+  ['Headlight Restoration', 'Removes yellowing and haze, finished with UV protection.', 2500, 60, 'addon', 'detailing', null, null],
+  ['Leather Conditioning', 'Cleans and nourishes leather seats and trims.', 2000, 30, 'addon', 'detailing', null, null],
+  ['Odor Removal', 'Ozone treatment to eliminate smells.', 2000, 45, 'addon', 'detailing', null, null],
+  ['Glass Ceramic Coating', 'Hydrophobic coating on all windows for better visibility in the rain.', 4000, 45, 'addon', 'ceramic', 12, null],
+  ['Wheel & Caliper Coating', 'Ceramic coating for wheels and calipers so brake dust wipes right off.', 8000, 90, 'addon', 'ceramic', 12, null],
+  ['Tire Shine', 'Long-lasting tire dressing.', 300, 10, 'addon', 'wash', null, null],
 ];
 
 function pad(n) {
@@ -285,14 +312,30 @@ function migrate(raw) {
   }
 }
 
+const OLD_METHODS = { cash: 'Cash', card: 'Card', mobile: 'Mobile wallet', other: 'Other' };
+
+/** Upgrading from the version with a single payment method: turn "paid" bookings into payment records. */
+function backfillPayments(db) {
+  db.tx(() => {
+    for (const b of db.all("SELECT id, total, payment_method, completed_at, created_at FROM bookings WHERE payment_status = 'paid' AND total > 0")) {
+      const method = OLD_METHODS[b.payment_method] || b.payment_method || 'Cash';
+      db.run('INSERT INTO payments (booking_id, amount, method, note, created_at) VALUES (?, ?, ?, ?, ?)', b.id, b.total, method, 'Recorded before split payments', b.completed_at || b.created_at);
+      db.run('UPDATE bookings SET amount_paid = total, payment_method = ? WHERE id = ?', method, b.id);
+    }
+  });
+}
+
 function openDatabase(file, { adminEmail, adminPassword, adminName } = {}) {
   if (file !== ':memory:') fs.mkdirSync(path.dirname(path.resolve(file)), { recursive: true });
   const raw = new DatabaseSync(file);
   raw.exec('PRAGMA foreign_keys = ON;');
   if (file !== ':memory:') raw.exec('PRAGMA journal_mode = WAL;');
+  const hadPayments = Boolean(raw.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'payments'").get());
+  const hadBookings = Boolean(raw.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'bookings'").get());
   raw.exec(SCHEMA);
   migrate(raw);
   const db = wrap(raw);
+  if (hadBookings && !hadPayments) backfillPayments(db);
 
   // Seed: one admin account, the starter price list and a couple of staff.
   const admin = db.get("SELECT id FROM users WHERE role = 'admin' LIMIT 1");

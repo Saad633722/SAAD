@@ -2,13 +2,13 @@
 
 const express = require('express');
 const { hashPassword, verifyPassword, createSession, destroySession, rateLimit } = require('../auth');
-const { availability, HttpError, str, int, VEHICLE_TYPES, PAYMENT_METHODS, CATEGORIES } = require('../bookings');
+const { availability, HttpError, str, int, VEHICLE_TYPES, CATEGORIES } = require('../bookings');
 const { now } = require('../db');
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function publicSettings(s) {
-  const keys = ['business_name', 'tagline', 'phone', 'address', 'currency', 'tax_rate', 'open_time', 'close_time', 'slot_minutes', 'open_days', 'booking_window_days', 'large_vehicle_surcharge', 'points_per_unit', 'reward_points', 'reward_value'];
+  const keys = ['business_name', 'tagline', 'phone', 'address', 'currency', 'tax_rate', 'open_time', 'close_time', 'slot_minutes', 'open_days', 'booking_window_days', 'large_vehicle_surcharge', 'points_per_unit', 'reward_points', 'reward_value', 'payment_methods'];
   return Object.fromEntries(keys.map((k) => [k, s[k]]));
 }
 
@@ -67,7 +67,8 @@ module.exports = function publicRoutes(db, { secureCookies }) {
   });
 
   r.get('/settings', (_req, res) => {
-    res.json({ settings: publicSettings(db.getSettings()), vehicle_types: VEHICLE_TYPES, payment_methods: PAYMENT_METHODS, categories: CATEGORIES });
+    const settings = db.getSettings();
+    res.json({ settings: publicSettings(settings), vehicle_types: VEHICLE_TYPES, payment_methods: settings.payment_methods, categories: CATEGORIES });
   });
 
   // ?duration=<minutes of work> checks that a bay is free for the whole job.

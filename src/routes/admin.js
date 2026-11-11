@@ -55,7 +55,8 @@ module.exports = function adminRoutes(db) {
     );
     const revenueToday = db.get("SELECT COALESCE(SUM(total), 0) AS v FROM bookings WHERE status = 'completed' AND substr(completed_at, 1, 10) = ?", t).v;
     const revenueMonth = db.get("SELECT COALESCE(SUM(total), 0) AS v FROM bookings WHERE status = 'completed' AND substr(completed_at, 1, 7) = ?", month).v;
-    const unpaid = db.get("SELECT COUNT(*) AS c, COALESCE(SUM(total), 0) AS v FROM bookings WHERE status = 'completed' AND payment_status = 'unpaid'");
+    const unpaid = db.get("SELECT COUNT(*) AS c, COALESCE(SUM(total - amount_paid), 0) AS v FROM bookings WHERE status = 'completed' AND total - amount_paid > 0.004");
+    const collected_today = db.all('SELECT method, ROUND(SUM(amount), 2) AS amount, COUNT(*) AS count FROM payments WHERE substr(created_at, 1, 10) = ? GROUP BY method ORDER BY amount DESC', t);
     const totals = db.get(
       `SELECT (SELECT COUNT(*) FROM users WHERE role = 'customer') AS customers,
               (SELECT COUNT(*) FROM vehicles) AS vehicles,
@@ -88,7 +89,7 @@ module.exports = function adminRoutes(db) {
     const queue = B.withAddons(
       db,
       db.all(
-        `SELECT b.id, b.code, b.status, b.scheduled_at, b.duration_min, b.bay, b.total, b.service_name, b.service_category, b.payment_status, b.source,
+        `SELECT b.id, b.code, b.status, b.scheduled_at, b.duration_min, b.bay, b.total, b.service_name, b.service_category, b.payment_status, b.amount_paid, b.source,
                 v.id AS vehicle_id, v.plate, v.make, v.model, v.color, u.name AS customer_name, st.name AS staff_name
            FROM bookings b JOIN vehicles v ON v.id = b.vehicle_id
            LEFT JOIN users u ON u.id = b.customer_id LEFT JOIN staff st ON st.id = b.staff_id
@@ -114,6 +115,7 @@ module.exports = function adminRoutes(db) {
       queue,
       recent_feedback,
       followups: B.followUps(db),
+      collected_today,
     });
   });
 
@@ -127,7 +129,8 @@ module.exports = function adminRoutes(db) {
     }
     if (B.isValidDate(req.query.from)) where.push('substr(b.scheduled_at, 1, 10) >= ?'), params.push(req.query.from);
     if (B.isValidDate(req.query.to)) where.push('substr(b.scheduled_at, 1, 10) <= ?'), params.push(req.query.to);
-    if (req.query.payment) where.push('b.payment_status = ?'), params.push(String(req.query.payment));
+    if (req.query.payment === 'due') where.push("b.payment_status IN ('unpaid', 'partial')");
+    else if (req.query.payment) where.push('b.payment_status = ?'), params.push(String(req.query.payment));
     if (req.query.q) {
       const q = `%${String(req.query.q).trim()}%`;
       const plateQ = `%${B.normalizePlate(req.query.q)}%`;
@@ -206,7 +209,11 @@ module.exports = function adminRoutes(db) {
       staffId: body.staff_id,
       bay: body.bay,
       actorName: req.user.name,
-      extraDiscount: body.discount,
+      servicePrice: body.service_price,
+      applySurcharge: body.apply_surcharge === undefined ? true : Boolean(body.apply_surcharge),
+      discountType: body.discount_type || 'amount',
+      discountValue: body.discount_value ?? body.discount ?? 0,
+      discountReason: body.discount_reason,
     });
     if (int(body.mileage)) db.run('UPDATE bookings SET mileage = ? WHERE id = ?', int(body.mileage), id);
     res.status(201).json({ booking: B.bookingDetail(db, id) });
@@ -233,14 +240,13 @@ module.exports = function adminRoutes(db) {
     }
     if (body.admin_notes !== undefined) sets.push('admin_notes = ?'), vals.push(str(body.admin_notes, 2000));
     if (body.mileage !== undefined) sets.push('mileage = ?'), vals.push(int(body.mileage));
-    if (body.payment_status !== undefined) {
-      if (!['unpaid', 'paid', 'refunded'].includes(body.payment_status)) throw new HttpError(400, 'Invalid payment status.');
-      sets.push('payment_status = ?'), vals.push(body.payment_status);
-      if (body.payment_status !== b.payment_status) changes.push(`Payment marked ${body.payment_status}${body.payment_method ? ` (${body.payment_method})` : ''}`);
-    }
-    if (body.payment_method !== undefined) {
-      if (body.payment_method && !B.PAYMENT_METHODS.includes(body.payment_method)) throw new HttpError(400, 'Invalid payment method.');
-      sets.push('payment_method = ?'), vals.push(body.payment_method || null);
+    // Shortcut: { payment_status: 'paid', payment_method } records a payment for the remaining balance.
+    if (body.payment_status === 'paid') {
+      const cur = getBooking(b.id);
+      const due = Math.round((cur.total - cur.amount_paid) * 100) / 100;
+      if (due > 0) B.addPayments(db, cur, [{ amount: due, method: body.payment_method || db.getSettings().payment_methods[0] }], req.user.name);
+    } else if (body.payment_status !== undefined) {
+      throw new HttpError(400, 'Record payments and refunds with the payments endpoint.');
     }
     if (body.scheduled_at !== undefined && body.scheduled_at !== b.scheduled_at) {
       const m = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})$/.exec(body.scheduled_at);
@@ -256,6 +262,29 @@ module.exports = function adminRoutes(db) {
       });
     }
     const detail = B.bookingDetail(db, b.id);
+    res.json({ booking: detail, transitions: B.TRANSITIONS[detail.status] });
+  });
+
+  // Manual prices, extra/custom items and discounts.
+  r.put('/bookings/:id/pricing', (req, res) => {
+    const b = getBooking(req.params.id);
+    B.repriceBooking(db, b, req.body, req.user.name);
+    const detail = B.bookingDetail(db, b.id);
+    res.json({ booking: detail, transitions: B.TRANSITIONS[detail.status] });
+  });
+
+  // One or several payments: { payments: [{ method, amount, reference? }] } or a single { method, amount }.
+  r.post('/bookings/:id/payments', (req, res) => {
+    const b = getBooking(req.params.id);
+    const list = Array.isArray(req.body.payments) ? req.body.payments : [req.body];
+    B.addPayments(db, b, list, req.user.name);
+    const detail = B.bookingDetail(db, b.id);
+    res.status(201).json({ booking: detail, transitions: B.TRANSITIONS[detail.status] });
+  });
+
+  r.delete('/payments/:id', (req, res) => {
+    const p = B.deletePayment(db, req.params.id, req.user.name);
+    const detail = B.bookingDetail(db, p.booking_id);
     res.json({ booking: detail, transitions: B.TRANSITIONS[detail.status] });
   });
 
@@ -690,11 +719,22 @@ module.exports = function adminRoutes(db) {
       to,
     );
     const by_payment = db.all(
-      `SELECT COALESCE(b.payment_method, 'not recorded') AS method, b.payment_status AS status, COUNT(*) AS count, ROUND(SUM(b.total), 2) AS amount
-         FROM bookings b WHERE b.status = 'completed' AND ${inRange} GROUP BY method, status ORDER BY amount DESC`,
+      `SELECT p.method, COUNT(*) AS count,
+              ROUND(SUM(CASE WHEN p.amount > 0 THEN p.amount ELSE 0 END), 2) AS received,
+              ROUND(SUM(CASE WHEN p.amount < 0 THEN -p.amount ELSE 0 END), 2) AS refunded,
+              ROUND(SUM(p.amount), 2) AS amount
+         FROM payments p WHERE substr(p.created_at, 1, 10) BETWEEN ? AND ? GROUP BY p.method ORDER BY amount DESC`,
       from,
       to,
     );
+    summary.collected = Math.round(by_payment.reduce((sum, x) => sum + x.amount, 0) * 100) / 100;
+    summary.outstanding = db.get(
+      `SELECT ROUND(COALESCE(SUM(b.total - b.amount_paid), 0), 2) AS v FROM bookings b
+        WHERE b.status = 'completed' AND b.total - b.amount_paid > 0.004 AND ${inRange}`,
+      from,
+      to,
+    ).v;
+    summary.manual_discounts = db.get(`SELECT ROUND(COALESCE(SUM(b.manual_discount), 0), 2) AS v FROM bookings b WHERE b.status = 'completed' AND ${inRange}`, from, to).v;
     const by_hour = db.all(
       `SELECT substr(b.scheduled_at, 12, 2) AS hour, COUNT(*) AS count
          FROM bookings b WHERE b.status = 'completed' AND ${inRange} GROUP BY hour ORDER BY hour`,
@@ -751,8 +791,11 @@ module.exports = function adminRoutes(db) {
       ['Discount', 'discount'],
       ['Tax', 'tax'],
       ['Total', 'total'],
+      ['Discount reason', 'discount_reason'],
+      ['Paid', 'amount_paid'],
+      ['Balance', (b) => Math.round((b.total - b.amount_paid) * 100) / 100],
       ['Payment status', 'payment_status'],
-      ['Payment method', 'payment_method'],
+      ['Payment methods', 'payment_method'],
       ['Mileage', 'mileage'],
       ['Source', 'source'],
       ['Rating', 'rating'],
@@ -775,6 +818,14 @@ module.exports = function adminRoutes(db) {
     const body = req.body || {};
     const numeric = ['tax_rate', 'slot_minutes', 'bays', 'booking_window_days', 'large_vehicle_surcharge', 'points_per_unit', 'reward_points', 'reward_value'];
     const text = ['business_name', 'tagline', 'phone', 'address', 'currency'];
+    if (body.payment_methods !== undefined) {
+      const raw = Array.isArray(body.payment_methods) ? body.payment_methods : String(body.payment_methods).split(',');
+      const list = [];
+      for (const m of raw.map((x) => String(x).trim().slice(0, 30)).filter(Boolean)) if (!list.some((x) => x.toLowerCase() === m.toLowerCase())) list.push(m);
+      if (!list.length) throw new HttpError(400, 'Add at least one payment method.');
+      if (list.length > 12) throw new HttpError(400, 'Up to 12 payment methods.');
+      body.payment_methods = list;
+    }
     const updates = {};
     for (const key of Object.keys(body)) {
       if (!(key in DEFAULT_SETTINGS)) continue;
@@ -786,6 +837,8 @@ module.exports = function adminRoutes(db) {
         updates[key] = str(body[key], 120) || '';
       } else if (key === 'open_time' || key === 'close_time') {
         if (!/^\d{2}:\d{2}$/.test(body[key])) throw new HttpError(400, 'Times must be in HH:MM format.');
+        updates[key] = body[key];
+      } else if (key === 'payment_methods') {
         updates[key] = body[key];
       } else if (key === 'open_days') {
         const days = (Array.isArray(body[key]) ? body[key] : []).map(Number).filter((d) => d >= 0 && d <= 6);

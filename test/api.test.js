@@ -93,7 +93,7 @@ test('business branding and starter price list are seeded', async () => {
   assert.equal(coating.warranty_months, 36);
   assert.equal(coating.maintenance_months, 6);
   ctx.services = services;
-  ctx.pkg = services.find((s) => s.name === 'Wash & Vacuum');
+  ctx.pkg = services.find((s) => s.name === 'Service'); // Rs 700, 60 min (union rate list)
   ctx.shine = services.find((s) => s.name === 'Tire Shine');
   ctx.coating = coating;
   ctx.ppf = services.find((s) => s.name === 'PPF – Full Body');
@@ -132,9 +132,9 @@ test('customer manages vehicles; plates are normalised and unique', async () => 
 test('quote applies large-vehicle surcharge and adds up working time', async () => {
   const q = await alice('POST', '/api/my/quote', { vehicle_id: ctx.aliceCar.id, service_id: ctx.pkg.id, addon_ids: [ctx.shine.id] });
   assert.equal(q.status, 200);
-  assert.equal(q.data.subtotal, 30);
-  assert.equal(q.data.surcharge, 6); // 20% for SUV
-  assert.equal(q.data.total, 36);
+  assert.equal(q.data.subtotal, 1000); // 700 + 300 tire shine
+  assert.equal(q.data.surcharge, 500); // 50% for SUV
+  assert.equal(q.data.total, 1500);
   assert.equal(q.data.duration_min, 70);
 });
 
@@ -151,7 +151,7 @@ test('customer books an available slot; bay capacity covers the whole job', asyn
   const r = await alice('POST', '/api/my/bookings', { vehicle_id: ctx.aliceCar.id, service_id: ctx.pkg.id, addon_ids: [ctx.shine.id], scheduled_at: ctx.slot, notes: 'Dog hair in the back' });
   assert.equal(r.status, 201, JSON.stringify(r.data));
   assert.equal(r.data.booking.status, 'pending');
-  assert.equal(r.data.booking.total, 36);
+  assert.equal(r.data.booking.total, 1500);
   assert.equal(r.data.booking.code.slice(0, 3), 'MC-');
   assert.equal(r.data.booking.ready_at, `${date} 09:10`);
   assert.equal(r.data.booking.addons.length, 1);
@@ -230,12 +230,12 @@ test('admin runs the booking through its lifecycle; points are awarded', async (
   await admin('PATCH', `/api/admin/bookings/${ctx.booking.id}`, { status: 'in_progress', mileage: 42000 });
   r = await admin('PATCH', `/api/admin/bookings/${ctx.booking.id}`, { status: 'completed', payment_status: 'paid', payment_method: 'card', admin_notes: 'Small scratch rear bumper' });
   assert.equal(r.data.booking.status, 'completed');
-  assert.equal(r.data.booking.points_earned, 36);
+  assert.equal(r.data.booking.points_earned, 150); // 0.1 point per rupee
   assert.ok(r.data.booking.started_at && r.data.booking.completed_at);
   assert.ok(r.data.booking.events.length >= 4);
 
   const me = await alice('GET', '/api/my/me');
-  assert.equal(me.data.user.loyalty_points, 36);
+  assert.equal(me.data.user.loyalty_points, 150);
   // customers never see internal notes
   const mine = await alice('GET', `/api/my/bookings/${ctx.booking.id}`);
   assert.equal(mine.data.booking.admin_notes, undefined);
@@ -352,20 +352,21 @@ test('vehicle history for admin includes services, stats, timeline and notes', a
 });
 
 test('redeeming points discounts a booking and cancelling refunds them', async () => {
-  // Alice has 36 (wash) + 972 (coating: 810 + 20% SUV surcharge) points; add 500 more.
+  // Alice has 150 (service) + 7350 (coating: 49,000 + 50% SUV surcharge) points; add 500 more.
   const users = (await admin('GET', '/api/admin/customers?q=alice')).data.customers;
   await admin('PATCH', `/api/admin/customers/${users[0].id}`, { points_adjustment: 500 });
   const before = (await alice('GET', '/api/my/me')).data.user.loyalty_points;
-  assert.equal(before, 1508);
+  assert.equal(before, 8000);
   const date = openDay(1);
   const slot = (await alice('GET', `/api/availability?date=${date}&duration=60`)).data.slots.filter((s) => s.available).at(-1);
   const r = await alice('POST', '/api/my/bookings', { vehicle_id: ctx.aliceCar.id, service_id: ctx.pkg.id, scheduled_at: `${date} ${slot.time}`, redeem_points: true });
   assert.equal(r.status, 201, JSON.stringify(r.data));
-  // 30.00 to pay (25 + 20% SUV); rewards are 500 points = 25 off, so two rewards cover it in full
-  assert.equal(r.data.booking.discount, 30);
+  // Rs 1,050 to pay (700 + 50% SUV); rewards are 100 points = Rs 50 off, so 21 rewards cover it in full
+  assert.equal(r.data.booking.discount, 1050);
   assert.equal(r.data.booking.total, 0);
-  assert.equal(r.data.booking.points_redeemed, 1000);
-  assert.equal((await alice('GET', '/api/my/me')).data.user.loyalty_points, before - 1000);
+  assert.equal(r.data.booking.payment_status, 'paid'); // nothing to pay
+  assert.equal(r.data.booking.points_redeemed, 2100);
+  assert.equal((await alice('GET', '/api/my/me')).data.user.loyalty_points, before - 2100);
   const c = await alice('POST', `/api/my/bookings/${r.data.booking.id}/cancel`, { reason: 'Change of plans' });
   assert.equal(c.data.booking.status, 'cancelled');
   assert.equal((await alice('GET', '/api/my/me')).data.user.loyalty_points, before);
@@ -422,6 +423,138 @@ test('admin manages services (with warranty fields), staff and settings', async 
   assert.equal(pub.phone, '0300 1234567');
 });
 
+test('staff can enter a manual price and give a discount (amount or percent)', async () => {
+  const wash = ctx.services.find((x) => x.name === 'Wash');
+  // Land Cruiser at the rate-list "big car" price, no size surcharge on top, 10% off
+  let r = await admin('POST', '/api/admin/bookings', {
+    vehicle: { plate: 'LC 200', make: 'Toyota', model: 'Land Cruiser', type: 'suv' },
+    service_id: wash.id,
+    service_price: 700,
+    apply_surcharge: false,
+    discount_type: 'percent',
+    discount_value: 10,
+    discount_reason: 'Regular customer',
+    start_now: true,
+  });
+  assert.equal(r.status, 201, JSON.stringify(r.data));
+  let b = r.data.booking;
+  assert.equal(b.service_price, 700);
+  assert.equal(b.surcharge, 0);
+  assert.equal(b.manual_discount, 70);
+  assert.equal(b.discount_type, 'percent');
+  assert.equal(b.discount_value, 10);
+  assert.equal(b.discount_reason, 'Regular customer');
+  assert.equal(b.total, 630);
+  assert.equal(b.payment_status, 'unpaid');
+  assert.equal(b.balance, 630);
+  ctx.lc = b;
+
+  // bad input
+  assert.equal((await admin('POST', '/api/admin/bookings', { vehicle: { plate: 'XX1' }, service_id: wash.id, service_price: -5 })).status, 400);
+  assert.equal((await admin('POST', '/api/admin/bookings', { vehicle: { plate: 'XX2' }, service_id: wash.id, discount_type: 'percent', discount_value: 150 })).status, 400);
+
+  // Re-price at the counter: custom item (shampoo charged separately), catalog add-on, fixed discount
+  const shine = ctx.services.find((x) => x.name === 'Tire Shine');
+  r = await admin('PUT', `/api/admin/bookings/${b.id}/pricing`, {
+    service_price: 1200,
+    items: [{ name: 'Shampoo (charged separately)', price: 150 }, { service_id: shine.id, price: 250 }],
+    apply_surcharge: false,
+    discount_type: 'amount',
+    discount_value: 100,
+    discount_reason: 'Waited too long',
+  });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  b = r.data.booking;
+  assert.equal(b.subtotal, 1600);
+  assert.equal(b.manual_discount, 100);
+  assert.equal(b.total, 1500);
+  assert.deepEqual(b.addons.map((a) => [a.name, a.price]), [['Shampoo (charged separately)', 150], ['Tire Shine', 250]]);
+  assert.ok(b.events.some((e) => /Price updated: Rs 630 → Rs 1,500/.test(e.note || '')), JSON.stringify(b.events));
+
+  // a percentage discount stays a percentage when prices change
+  r = await admin('PUT', `/api/admin/bookings/${b.id}/pricing`, { discount_type: 'percent', discount_value: 10 });
+  assert.equal(r.data.booking.manual_discount, 160);
+  r = await admin('PUT', `/api/admin/bookings/${b.id}/pricing`, { service_price: 2200 });
+  assert.equal(r.data.booking.manual_discount, 260);
+  r = await admin('PUT', `/api/admin/bookings/${b.id}/pricing`, { service_price: 1200 });
+  b = r.data.booking;
+  // remove the shampoo line, keep tire shine, turn the SUV surcharge back on, no discount
+  r = await admin('PUT', `/api/admin/bookings/${b.id}/pricing`, { items: [{ id: b.addons[1].id, price: 250 }], apply_surcharge: true, discount_value: 0 });
+  b = r.data.booking;
+  assert.equal(b.subtotal, 1450);
+  assert.equal(b.surcharge, 725);
+  assert.equal(b.total, 2175);
+  assert.equal(b.discount_reason, null);
+  assert.equal((await admin('PUT', `/api/admin/bookings/${b.id}/pricing`, { items: [{ name: '', price: 5 }] })).status, 400);
+  assert.equal((await alice('PUT', `/api/admin/bookings/${b.id}/pricing`, { service_price: 1 })).status, 403);
+  ctx.lc = b;
+});
+
+test('bills can be paid in parts with several payment methods, and refunded', async () => {
+  const id = ctx.lc.id; // total Rs 2,175
+  // split: cash + JazzCash in one go
+  let r = await admin('POST', `/api/admin/bookings/${id}/payments`, { payments: [{ method: 'cash', amount: 1000 }, { method: 'JazzCash', amount: 500, reference: 'TXN123' }] });
+  assert.equal(r.status, 201, JSON.stringify(r.data));
+  let b = r.data.booking;
+  assert.equal(b.amount_paid, 1500);
+  assert.equal(b.balance, 675);
+  assert.equal(b.payment_status, 'partial');
+  assert.equal(b.payment_method, 'Cash + JazzCash'); // method names normalised to the settings list
+  assert.equal(b.payments.length, 2);
+  assert.equal(b.payments[1].reference, 'TXN123');
+
+  // can't overpay, unknown method, zero amount
+  assert.equal((await admin('POST', `/api/admin/bookings/${id}/payments`, { method: 'Card', amount: 700 })).status, 400);
+  assert.equal((await admin('POST', `/api/admin/bookings/${id}/payments`, { method: 'Bitcoin', amount: 10 })).status, 400);
+  assert.equal((await admin('POST', `/api/admin/bookings/${id}/payments`, { method: 'Card', amount: 0 })).status, 400);
+
+  r = await admin('POST', `/api/admin/bookings/${id}/payments`, { method: 'Card', amount: 675 });
+  b = r.data.booking;
+  assert.equal(b.payment_status, 'paid');
+  assert.equal(b.balance, 0);
+  // goodwill: lower the price after paying -> refund due, then refund it
+  r = await admin('PUT', `/api/admin/bookings/${id}/pricing`, { discount_type: 'amount', discount_value: 175, discount_reason: 'Goodwill' });
+  assert.equal(r.data.booking.total, 2000);
+  assert.equal(r.data.booking.balance, -175);
+  r = await admin('POST', `/api/admin/bookings/${id}/payments`, { method: 'Cash', amount: -175, note: 'Goodwill' });
+  assert.equal(r.data.booking.payment_status, 'paid');
+  assert.equal(r.data.booking.balance, 0);
+  assert.equal((await admin('POST', `/api/admin/bookings/${id}/payments`, { method: 'Cash', amount: -5000 })).status, 400);
+  const card = r.data.booking.payments.find((p) => p.method === 'Card');
+  r = await admin('DELETE', `/api/admin/payments/${card.id}`);
+  assert.equal(r.data.booking.amount_paid, 1325);
+  assert.equal(r.data.booking.payment_status, 'partial');
+  assert.ok(r.data.booking.events.some((e) => /Payment removed/.test(e.note || '')));
+
+  // "mark paid" shortcut records the balance
+  r = await admin('PATCH', `/api/admin/bookings/${id}`, { payment_status: 'paid', payment_method: 'Easypaisa' });
+  assert.equal(r.data.booking.payment_status, 'paid');
+  assert.equal(r.data.booking.payments.at(-1).method, 'Easypaisa');
+  assert.equal(r.data.booking.payments.at(-1).amount, 675);
+
+  // dashboard and reports see the money by method
+  const stats = (await admin('GET', '/api/admin/stats')).data;
+  const today = Object.fromEntries(stats.collected_today.map((m) => [m.method, m.amount]));
+  assert.equal(today.Cash, 825);
+  assert.equal(today.JazzCash, 500);
+  const rep = (await admin('GET', `/api/admin/reports?from=2000-01-01&to=${openDay(10)}`)).data;
+  assert.ok(rep.by_payment.some((m) => m.method === 'Cash' && m.refunded === 175));
+  assert.ok(rep.summary.collected >= 2000);
+  const csv = (await admin('GET', `/api/admin/reports/bookings.csv?from=2000-01-01&to=${openDay(10)}`)).data;
+  assert.match(csv, /Cash \+ JazzCash \+ Easypaisa/);
+});
+
+test('payment methods are configurable', async () => {
+  let r = await admin('PUT', '/api/admin/settings', { payment_methods: 'Cash, Card, JazzCash, card, Raast' });
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.data.settings.payment_methods, ['Cash', 'Card', 'JazzCash', 'Raast']);
+  assert.deepEqual((await alice('GET', '/api/settings')).data.payment_methods, ['Cash', 'Card', 'JazzCash', 'Raast']);
+  assert.equal((await admin('PUT', '/api/admin/settings', { payment_methods: ' , ' })).status, 400);
+  // customers see their payments, but not who took them
+  const mine = (await alice('GET', `/api/my/bookings/${ctx.booking.id}`)).data.booking;
+  assert.ok(Array.isArray(mine.payments));
+});
+
 test('disabled customers cannot log in', async () => {
   const bobRow = db.get("SELECT id FROM users WHERE email = 'bob@example.com'");
   await admin('PATCH', `/api/admin/customers/${bobRow.id}`, { active: false });
@@ -443,5 +576,26 @@ test('databases from the first version are upgraded in place', () => {
   assert.ok(upgraded.all('PRAGMA table_info(bookings)').some((c) => c.name === 'service_category'));
   assert.equal(upgraded.get("SELECT category FROM services WHERE name = 'Old Wash'").category, 'wash');
   upgraded.close();
+
+  // bookings marked "paid" in the old single-method version become payment records
+  const file2 = path.join(dir, 'old2.db');
+  const old2 = new DatabaseSync(file2);
+  old2.exec(`CREATE TABLE bookings (id INTEGER PRIMARY KEY, code TEXT NOT NULL UNIQUE, vehicle_id INTEGER NOT NULL, customer_id INTEGER, service_id INTEGER,
+              service_name TEXT NOT NULL, service_price REAL NOT NULL, duration_min INTEGER NOT NULL DEFAULT 30, scheduled_at TEXT NOT NULL,
+              status TEXT NOT NULL DEFAULT 'pending', bay INTEGER, staff_id INTEGER, subtotal REAL NOT NULL DEFAULT 0, surcharge REAL NOT NULL DEFAULT 0,
+              discount REAL NOT NULL DEFAULT 0, tax REAL NOT NULL DEFAULT 0, total REAL NOT NULL DEFAULT 0, points_redeemed INTEGER NOT NULL DEFAULT 0,
+              points_earned INTEGER NOT NULL DEFAULT 0, payment_status TEXT NOT NULL DEFAULT 'unpaid', payment_method TEXT, customer_notes TEXT,
+              admin_notes TEXT, mileage INTEGER, source TEXT NOT NULL DEFAULT 'online', rating INTEGER, feedback TEXT, created_at TEXT NOT NULL,
+              started_at TEXT, completed_at TEXT, cancelled_at TEXT);
+            INSERT INTO bookings (code, vehicle_id, service_name, service_price, scheduled_at, status, total, payment_status, payment_method, created_at, completed_at)
+              VALUES ('CW-1', 1, 'Wash', 500, '2025-01-01 10:00', 'completed', 500, 'paid', 'card', '2025-01-01 09:00:00', '2025-01-01 10:40:00'),
+                     ('CW-2', 1, 'Wash', 500, '2025-01-02 10:00', 'completed', 500, 'unpaid', NULL, '2025-01-02 09:00:00', '2025-01-02 10:40:00');`);
+  old2.close();
+  const up2 = openDatabase(file2);
+  const pays = up2.all('SELECT booking_id, amount, method FROM payments');
+  assert.deepEqual(pays, [{ booking_id: 1, amount: 500, method: 'Card' }]);
+  assert.equal(up2.get('SELECT amount_paid FROM bookings WHERE id = 1').amount_paid, 500);
+  assert.equal(up2.get('SELECT amount_paid FROM bookings WHERE id = 2').amount_paid, 0);
+  up2.close();
   fs.rmSync(dir, { recursive: true, force: true });
 });

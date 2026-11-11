@@ -14,7 +14,6 @@ const VEHICLE_TYPES = ['sedan', 'hatchback', 'coupe', 'suv', 'pickup', 'van', 'm
 const LARGE_TYPES = new Set(['suv', 'pickup', 'van']);
 const STATUSES = ['pending', 'confirmed', 'in_progress', 'completed', 'cancelled', 'no_show'];
 const ACTIVE_STATUSES = ['pending', 'confirmed', 'in_progress'];
-const PAYMENT_METHODS = ['cash', 'card', 'mobile', 'other'];
 const CATEGORIES = ['wash', 'detailing', 'ceramic', 'ppf', 'other'];
 
 // Which status changes the admin is allowed to make.
@@ -116,8 +115,53 @@ function vehicleInput(body, { partial = false } = {}) {
   return out;
 }
 
-/** Work out the price (and total working time) for a booking. */
-function quote(db, { serviceId, addonIds = [], vehicleType = 'sedan', redeemPoints = false, availablePoints = 0, extraDiscount = 0 }) {
+const MAX_PRICE = 10000000;
+const DISCOUNT_TYPES = ['amount', 'percent'];
+
+function priceValue(v, label) {
+  const n = Number(v);
+  if (v === '' || v === null || v === undefined || !Number.isFinite(n) || n < 0 || n > MAX_PRICE) throw new HttpError(400, `${label} must be a number between 0 and ${MAX_PRICE.toLocaleString('en')}.`);
+  return round2(n);
+}
+
+const moneyText = (settings, n) => `${settings.currency || ''} ${Number(n).toLocaleString('en', { maximumFractionDigits: 2 })}`.trim();
+
+/**
+ * Totals for a bill. Order: subtotal -> size surcharge -> staff discount (amount or %)
+ * -> loyalty points -> tax.
+ */
+function computeTotals(settings, { subtotal, vehicleType, applySurcharge = true, discountType = 'amount', discountValue = 0, redeemPoints = false, availablePoints = 0, fixedPointsDiscount = null }) {
+  if (!DISCOUNT_TYPES.includes(discountType)) throw new HttpError(400, 'Discount type must be "amount" or "percent".');
+  const dv = Number(discountValue || 0);
+  if (!Number.isFinite(dv) || dv < 0) throw new HttpError(400, 'Discount must be a positive number.');
+  if (discountType === 'percent' && dv > 100) throw new HttpError(400, 'A percentage discount cannot be more than 100%.');
+  const surcharge = applySurcharge && LARGE_TYPES.has(vehicleType) ? round2((subtotal * Number(settings.large_vehicle_surcharge || 0)) / 100) : 0;
+  const gross = round2(subtotal + surcharge);
+  const manualDiscount = discountType === 'percent' ? round2((gross * dv) / 100) : round2(Math.min(dv, gross));
+  const remaining = round2(gross - manualDiscount);
+
+  let pointsDiscount = 0;
+  let pointsRedeemed = 0;
+  const rewardPoints = Number(settings.reward_points) || 0;
+  const rewardValue = Number(settings.reward_value) || 0;
+  if (fixedPointsDiscount !== null) {
+    pointsDiscount = round2(Math.min(Math.max(0, fixedPointsDiscount), remaining));
+  } else if (redeemPoints && rewardPoints > 0 && rewardValue > 0 && remaining > 0) {
+    const blocks = Math.min(Math.floor(availablePoints / rewardPoints), Math.ceil(remaining / rewardValue));
+    pointsDiscount = round2(Math.min(blocks * rewardValue, remaining));
+    pointsRedeemed = blocks * rewardPoints;
+  }
+  const discount = round2(manualDiscount + pointsDiscount);
+  const taxable = Math.max(0, gross - discount);
+  const tax = round2((taxable * Number(settings.tax_rate || 0)) / 100);
+  return { subtotal: round2(subtotal), surcharge, manualDiscount, pointsDiscount, pointsRedeemed, discount, tax, total: round2(taxable + tax) };
+}
+
+/**
+ * Work out the price (and total working time) for a booking.
+ * Staff may override the package price and give a discount (amount or percent).
+ */
+function quote(db, { serviceId, addonIds = [], vehicleType = 'sedan', redeemPoints = false, availablePoints = 0, servicePrice, applySurcharge = true, discountType = 'amount', discountValue = 0 }) {
   const settings = db.getSettings();
   const service = db.get("SELECT * FROM services WHERE id = ? AND kind = 'package'", int(serviceId));
   if (!service) throw new HttpError(400, 'Please choose a service package.');
@@ -129,30 +173,18 @@ function quote(db, { serviceId, addonIds = [], vehicleType = 'sedan', redeemPoin
     if (!a) throw new HttpError(400, 'One of the selected extras is not available.');
     return a;
   });
-
-  const subtotal = round2(service.price + addons.reduce((s, a) => s + a.price, 0));
-  const surcharge = LARGE_TYPES.has(vehicleType) ? round2((subtotal * Number(settings.large_vehicle_surcharge || 0)) / 100) : 0;
-  const gross = subtotal + surcharge;
-
-  let discount = 0;
-  let pointsRedeemed = 0;
-  const rewardPoints = Number(settings.reward_points) || 0;
-  const rewardValue = Number(settings.reward_value) || 0;
-  if (redeemPoints && rewardPoints > 0 && rewardValue > 0) {
-    const maxBlocks = Math.floor(availablePoints / rewardPoints);
-    const neededBlocks = Math.ceil(gross / rewardValue);
-    const blocks = Math.min(maxBlocks, neededBlocks);
-    discount = Math.min(blocks * rewardValue, gross);
-    pointsRedeemed = blocks * rewardPoints;
-  }
-  discount = round2(Math.min(gross, discount + Math.max(0, Number(extraDiscount) || 0)));
-
-  const taxable = Math.max(0, gross - discount);
-  const tax = round2((taxable * Number(settings.tax_rate || 0)) / 100);
-  const total = round2(taxable + tax);
+  const price = servicePrice === undefined || servicePrice === null || servicePrice === '' ? service.price : priceValue(servicePrice, 'Price');
+  const totals = computeTotals(settings, {
+    subtotal: price + addons.reduce((s, a) => s + a.price, 0),
+    vehicleType,
+    applySurcharge,
+    discountType,
+    discountValue,
+    redeemPoints,
+    availablePoints,
+  });
   const duration = service.duration_min + addons.reduce((s, a) => s + a.duration_min, 0);
-
-  return { service, addons, subtotal, surcharge, discount, tax, total, pointsRedeemed, duration };
+  return { service, servicePrice: price, addons, ...totals, duration };
 }
 
 // =====================================================================
@@ -281,14 +313,24 @@ function addEvent(db, bookingId, status, note, actorName) {
  * Create a booking (inside a transaction). With enforceSlot the time must be a
  * free slot for the whole job (customer bookings); staff can always book.
  */
-function createBooking(db, { vehicle, customerId, serviceId, addonIds, scheduledAt, redeemPoints, customerNotes, adminNotes, source, status, staffId, bay, actorName, extraDiscount, enforceSlot = false }) {
+function createBooking(db, { vehicle, customerId, serviceId, addonIds, scheduledAt, redeemPoints, customerNotes, adminNotes, source, status, staffId, bay, actorName, servicePrice, applySurcharge = true, discountType = 'amount', discountValue = 0, discountReason, enforceSlot = false }) {
   return db.tx(() => {
     let availablePoints = 0;
     if (customerId) {
       const c = db.get('SELECT loyalty_points FROM users WHERE id = ?', customerId);
       availablePoints = c ? c.loyalty_points : 0;
     }
-    const q = quote(db, { serviceId, addonIds, vehicleType: vehicle.type, redeemPoints: Boolean(redeemPoints) && Boolean(customerId), availablePoints, extraDiscount });
+    const q = quote(db, {
+      serviceId,
+      addonIds,
+      vehicleType: vehicle.type,
+      redeemPoints: Boolean(redeemPoints) && Boolean(customerId),
+      availablePoints,
+      servicePrice,
+      applySurcharge,
+      discountType,
+      discountValue,
+    });
     const at = enforceSlot ? assertSlotBookable(db, scheduledAt, { duration: q.duration }) : scheduledAt;
     let code = makeCode();
     while (db.get('SELECT 1 FROM bookings WHERE code = ?', code)) code = makeCode();
@@ -296,14 +338,14 @@ function createBooking(db, { vehicle, customerId, serviceId, addonIds, scheduled
     const ts = now();
     const { id } = db.run(
       `INSERT INTO bookings (code, vehicle_id, customer_id, service_id, service_name, service_price, service_category, duration_min, scheduled_at, status,
-         bay, staff_id, subtotal, surcharge, discount, tax, total, points_redeemed, customer_notes, admin_notes, source, created_at, started_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         bay, staff_id, subtotal, surcharge, discount, manual_discount, discount_type, discount_value, discount_reason, tax, total, points_redeemed, customer_notes, admin_notes, source, created_at, started_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       code,
       vehicle.id,
       customerId || null,
       q.service.id,
       q.service.name,
-      q.service.price,
+      q.servicePrice,
       q.service.category,
       q.duration,
       at,
@@ -313,6 +355,10 @@ function createBooking(db, { vehicle, customerId, serviceId, addonIds, scheduled
       q.subtotal,
       q.surcharge,
       q.discount,
+      q.manualDiscount,
+      q.manualDiscount ? discountType : 'amount',
+      q.manualDiscount ? Number(discountValue) : 0,
+      q.manualDiscount ? str(discountReason, 200) : null,
       q.tax,
       q.total,
       q.pointsRedeemed,
@@ -329,6 +375,7 @@ function createBooking(db, { vehicle, customerId, serviceId, addonIds, scheduled
       db.run('UPDATE users SET loyalty_points = loyalty_points - ? WHERE id = ?', q.pointsRedeemed, customerId);
     }
     addEvent(db, id, initial, source === 'walk_in' ? 'Walk-in booking created' : 'Booking created', actorName);
+    if (q.total <= 0) recalcPayments(db, id);
     return id;
   });
 }
@@ -483,6 +530,161 @@ function changeStatus(db, booking, next, { actorName, note, enforceTransitions =
   });
 }
 
+// =====================================================================
+// Manual pricing and discounts (staff)
+// =====================================================================
+
+/**
+ * Change the prices on a bill: the package price, the extra items (existing
+ * ones can be re-priced or removed, catalog add-ons or custom items added),
+ * the size surcharge and a staff discount. Loyalty points already redeemed
+ * stay applied; points earned on a completed job are adjusted.
+ */
+function repriceBooking(db, booking, body, actorName) {
+  const settings = db.getSettings();
+  if (['cancelled', 'no_show'].includes(booking.status)) throw new HttpError(400, 'Cancelled bookings cannot be re-priced.');
+  const vehicle = db.get('SELECT type FROM vehicles WHERE id = ?', booking.vehicle_id);
+  const current = db.all('SELECT * FROM booking_addons WHERE booking_id = ?', booking.id);
+  const servicePrice = body.service_price === undefined ? booking.service_price : priceValue(body.service_price, 'Package price');
+
+  const items = Array.isArray(body.items) ? body.items : current.map((a) => ({ id: a.id, price: a.price }));
+  if (items.length > 30) throw new HttpError(400, 'Too many items on one bill.');
+  const keep = [];
+  const add = [];
+  for (const it of items) {
+    const price = priceValue(it.price, 'Item price');
+    if (it.id) {
+      const row = current.find((a) => a.id === int(it.id));
+      if (!row) throw new HttpError(400, 'One of the items does not belong to this booking.');
+      keep.push({ id: row.id, name: row.service_id ? row.name : str(it.name, 80) || row.name, price });
+    } else if (it.service_id) {
+      const svc = db.get("SELECT * FROM services WHERE id = ? AND kind = 'addon'", int(it.service_id));
+      if (!svc) throw new HttpError(400, 'Unknown extra.');
+      add.push({ service_id: svc.id, name: svc.name, price });
+    } else {
+      const name = str(it.name, 80);
+      if (!name) throw new HttpError(400, 'Please give each custom item a name.');
+      add.push({ service_id: null, name, price });
+    }
+  }
+
+  const discountType = body.discount_type || (body.discount_value === undefined ? booking.discount_type : 'amount') || 'amount';
+  const discountValue = body.discount_value === undefined ? (booking.discount_value || booking.manual_discount) : body.discount_value;
+  const applySurcharge = body.apply_surcharge === undefined ? booking.surcharge > 0 || !LARGE_TYPES.has(vehicle.type) : Boolean(body.apply_surcharge);
+  const subtotal = servicePrice + [...keep, ...add].reduce((sum, a) => sum + a.price, 0);
+  const t = computeTotals(settings, {
+    subtotal,
+    vehicleType: vehicle.type,
+    applySurcharge,
+    discountType,
+    discountValue,
+    fixedPointsDiscount: round2(booking.discount - booking.manual_discount),
+  });
+  const reason = t.manualDiscount ? str(body.discount_reason, 200) ?? booking.discount_reason : null;
+
+  db.tx(() => {
+    for (const a of current) if (!keep.some((k) => k.id === a.id)) db.run('DELETE FROM booking_addons WHERE id = ?', a.id);
+    for (const k of keep) db.run('UPDATE booking_addons SET name = ?, price = ? WHERE id = ?', k.name, k.price, k.id);
+    for (const a of add) db.run('INSERT INTO booking_addons (booking_id, service_id, name, price) VALUES (?, ?, ?, ?)', booking.id, a.service_id, a.name, a.price);
+    db.run(
+      `UPDATE bookings SET service_price = ?, subtotal = ?, surcharge = ?, discount = ?, manual_discount = ?, discount_type = ?, discount_value = ?, discount_reason = ?, tax = ?, total = ? WHERE id = ?`,
+      servicePrice,
+      t.subtotal,
+      t.surcharge,
+      t.discount,
+      t.manualDiscount,
+      t.manualDiscount ? discountType : 'amount',
+      t.manualDiscount ? Number(discountValue) : 0,
+      reason,
+      t.tax,
+      t.total,
+      booking.id,
+    );
+    if (booking.status === 'completed' && booking.customer_id) {
+      const earned = Math.floor(t.total * Number(settings.points_per_unit || 0));
+      const diff = earned - booking.points_earned;
+      if (diff) {
+        db.run('UPDATE users SET loyalty_points = MAX(0, loyalty_points + ?) WHERE id = ?', diff, booking.customer_id);
+        db.run('UPDATE bookings SET points_earned = ? WHERE id = ?', earned, booking.id);
+      }
+    }
+    if (Math.abs(t.total - booking.total) > 0.004 || t.manualDiscount !== booking.manual_discount) {
+      const disc = t.manualDiscount ? ` · discount ${moneyText(settings, t.manualDiscount)}${reason ? ` (${reason})` : ''}` : '';
+      addEvent(db, booking.id, booking.status, `Price updated: ${moneyText(settings, booking.total)} → ${moneyText(settings, t.total)}${disc}`, actorName);
+    }
+    recalcPayments(db, booking.id);
+  });
+}
+
+// =====================================================================
+// Payments (split / partial payments, several methods, refunds)
+// =====================================================================
+
+function resolveMethod(settings, method) {
+  const list = Array.isArray(settings.payment_methods) ? settings.payment_methods : [];
+  const found = list.find((m) => m.toLowerCase() === String(method || '').trim().toLowerCase());
+  if (!found) throw new HttpError(400, `Unknown payment method. Use one of: ${list.join(', ')}.`);
+  return found;
+}
+
+/** Recompute amount paid, payment status and the method summary for a booking. */
+function recalcPayments(db, bookingId) {
+  const b = db.get('SELECT total FROM bookings WHERE id = ?', bookingId);
+  const rows = db.all('SELECT amount, method FROM payments WHERE booking_id = ? ORDER BY id', bookingId);
+  const paid = round2(rows.reduce((s, r) => s + r.amount, 0));
+  const methods = [...new Set(rows.filter((r) => r.amount > 0).map((r) => r.method))];
+  let status;
+  if (paid <= 0.004) status = rows.some((r) => r.amount < 0) ? 'refunded' : b.total <= 0.004 ? 'paid' : 'unpaid';
+  else status = paid + 0.004 < b.total ? 'partial' : 'paid';
+  db.run('UPDATE bookings SET amount_paid = ?, payment_status = ?, payment_method = ? WHERE id = ?', paid, status, methods.join(' + ') || null, bookingId);
+  return { paid, status };
+}
+
+/**
+ * Record one or more payments at once, e.g. [{ method: 'Cash', amount: 500 }, { method: 'JazzCash', amount: 200 }].
+ * A negative amount is a refund.
+ */
+function addPayments(db, booking, list, actorName) {
+  const settings = db.getSettings();
+  if (!Array.isArray(list) || !list.length) throw new HttpError(400, 'Please enter at least one payment.');
+  if (list.length > 10) throw new HttpError(400, 'Too many payments at once.');
+  if (['cancelled', 'no_show'].includes(booking.status) && list.some((p) => Number(p.amount) > 0)) {
+    throw new HttpError(400, 'This booking was cancelled — you can only record refunds.');
+  }
+  const rows = list.map((p) => {
+    const amount = round2(Number(p.amount));
+    if (!Number.isFinite(amount) || amount === 0 || Math.abs(amount) > MAX_PRICE) throw new HttpError(400, 'Each payment needs an amount.');
+    return { amount, method: resolveMethod(settings, p.method), reference: str(p.reference, 80), note: str(p.note, 200) };
+  });
+  const after = round2(booking.amount_paid + rows.reduce((s, r) => s + r.amount, 0));
+  if (after > booking.total + 0.004) {
+    throw new HttpError(400, `That is more than the balance due (${moneyText(settings, Math.max(0, booking.total - booking.amount_paid))}).`);
+  }
+  if (after < -0.004) throw new HttpError(400, 'You cannot refund more than has been paid.');
+  return db.tx(() => {
+    const ts = now();
+    for (const r of rows) {
+      db.run('INSERT INTO payments (booking_id, amount, method, reference, note, received_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', booking.id, r.amount, r.method, r.reference, r.note, actorName || null, ts);
+    }
+    const res = recalcPayments(db, booking.id);
+    const text = rows.map((r) => `${moneyText(settings, Math.abs(r.amount))} ${r.method}`).join(' + ');
+    addEvent(db, booking.id, db.get('SELECT status FROM bookings WHERE id = ?', booking.id).status, `${rows[0].amount < 0 ? 'Refund' : 'Payment'}: ${text}`, actorName);
+    return res;
+  });
+}
+
+function deletePayment(db, paymentId, actorName) {
+  const p = db.get('SELECT * FROM payments WHERE id = ?', int(paymentId));
+  if (!p) throw new HttpError(404, 'Payment not found.');
+  const settings = db.getSettings();
+  db.tx(() => {
+    db.run('DELETE FROM payments WHERE id = ?', p.id);
+    recalcPayments(db, p.booking_id);
+    addEvent(db, p.booking_id, db.get('SELECT status FROM bookings WHERE id = ?', p.booking_id).status, `Payment removed: ${moneyText(settings, p.amount)} ${p.method}`, actorName);
+  });
+  return p;
+}
+
 /** Full booking record with add-ons, staff, vehicle, timeline and estimated ready time. */
 function bookingDetail(db, id) {
   const b = db.get(
@@ -500,6 +702,9 @@ function bookingDetail(db, id) {
   b.addons = db.all('SELECT id, service_id, name, price FROM booking_addons WHERE booking_id = ? ORDER BY id', id);
   b.events = db.all('SELECT status, note, actor_name, created_at FROM booking_events WHERE booking_id = ? ORDER BY id', id);
   b.ready_at = readyAt(db.getSettings(), b.scheduled_at, b.duration_min);
+  b.payments = db.all('SELECT id, amount, method, reference, note, received_by, created_at FROM payments WHERE booking_id = ? ORDER BY id', id);
+  // Negative balance = refund due (price lowered after paying, or a cancelled job that was paid for).
+  b.balance = ['cancelled', 'no_show'].includes(b.status) ? round2(-b.amount_paid) : round2(b.total - b.amount_paid);
   return b;
 }
 
@@ -590,7 +795,6 @@ module.exports = {
   VEHICLE_TYPES,
   STATUSES,
   ACTIVE_STATUSES,
-  PAYMENT_METHODS,
   CATEGORIES,
   TRANSITIONS,
   normalizePlate,
@@ -602,6 +806,13 @@ module.exports = {
   workSpans,
   hoursOf,
   createBooking,
+  computeTotals,
+  repriceBooking,
+  addPayments,
+  deletePayment,
+  recalcPayments,
+  resolveMethod,
+  DISCOUNT_TYPES,
   changeStatus,
   recordProtections,
   describeProtection,

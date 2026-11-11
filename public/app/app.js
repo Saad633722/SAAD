@@ -185,7 +185,7 @@
       <div class="card-head"><div><b>${esc(fmtDate(b.scheduled_at))}</b> · ${esc(fmtTime(b.scheduled_at))}</div>${statusBadge(b.status)}</div>
       <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start">
         <div><div><b>${esc(b.service_name)}</b></div>${addonsText(b)}<div style="margin-top:6px">${plate(b.plate)} <span class="muted">${esc(vehicleName(b))}</span></div></div>
-        <div style="text-align:right"><b>${money(b.total)}</b><div class="muted mono" style="font-size:.8rem">${esc(b.code)}</div></div>
+        <div style="text-align:right"><b>${money(b.total)}</b><div class="muted mono" style="font-size:.8rem">${esc(b.code)}</div>${b.status === 'completed' && b.total - b.amount_paid > 0.004 ? `<div>${payBadge(b.payment_status)}</div>` : ''}</div>
       </div>
       <p class="muted" style="margin:10px 0">${esc(STATUS_HELP[b.status])}${isActive(b) && b.ready_at ? ` <span class="ready">Ready around <b>${esc(fmtDateTime(b.ready_at))}</b></span>` : ''}</p>
       <div class="btn-row">
@@ -321,7 +321,7 @@
             ${canRedeem ? `<label class="check" style="margin:14px 0 0"><input type="checkbox" name="redeem_points"> Use my ${user.loyalty_points} points</label><small class="muted">${S().reward_points} points = ${money(S().reward_value)} off</small>` : ''}
             <div class="alert hidden" data-error style="margin-top:14px"></div>
             <button class="btn btn-primary btn-block" style="margin-top:16px" type="submit">Confirm booking</button>
-            <small class="muted" style="display:block;margin-top:8px;text-align:center">Pay at the shop when you collect your car.</small>
+            <small class="muted" style="display:block;margin-top:8px;text-align:center">Prices are for a standard car — the final price for your vehicle is confirmed at the shop. Pay by ${esc(UI.state.paymentMethods.join(', '))} when you collect your car.</small>
           </div>
         </div>
       </form>`);

@@ -64,7 +64,7 @@ const byName = (name) => {
   return s;
 };
 const washes = services.filter((s) => s.kind === 'package' && s.category === 'wash');
-const detailing = services.filter((s) => s.kind === 'package' && s.category === 'detailing' && s.name !== 'Paint Correction');
+const detailing = services.filter((s) => s.kind === 'package' && s.category === 'detailing' && !/Paint Correction/.test(s.name));
 const extras = services.filter((s) => s.kind === 'addon' && !s.warranty_months);
 const staff = db.all('SELECT * FROM staff');
 const feedback = ['Spotless, thank you!', 'Great job as always.', 'Quick and friendly.', 'Interior looks brand new.', 'The coating looks incredible.', 'A bit of a wait but worth it.', null, null];
@@ -86,6 +86,7 @@ function makeBooking(vehicleId, { day, hour, status, payment = 'paid', rating, p
     staffId: service.category === 'ppf' || service.category === 'ceramic' ? staff[1].id : pick(staff).id,
     bay: 1 + Math.floor(rand() * settings.bays),
     customerNotes: rand() < 0.15 ? pick(['Please be careful with the roof rack.', 'Dog hair in the back seats.', 'Stone chips on the bonnet.']) : null,
+    ...(rand() < 0.12 ? { discountType: 'percent', discountValue: 10, discountReason: pick(['Regular customer', 'Friend of the owner', 'Waited too long']) } : {}),
   });
   const b = db.get('SELECT * FROM bookings WHERE id = ?', id);
   const created = new Date(scheduled.getTime() - 2 * 86400000);
@@ -113,18 +114,29 @@ function makeBooking(vehicleId, { day, hour, status, payment = 'paid', rating, p
   const earned = v.owner_id ? Math.floor(b.total * settings.points_per_unit) : 0;
   if (earned) db.run('UPDATE users SET loyalty_points = loyalty_points + ? WHERE id = ?', earned, v.owner_id);
   db.run(
-    `UPDATE bookings SET status = 'completed', started_at = ?, completed_at = ?, points_earned = ?, payment_status = ?, payment_method = ?, mileage = ?, rating = ?, feedback = ? WHERE id = ?`,
+    `UPDATE bookings SET status = 'completed', started_at = ?, completed_at = ?, points_earned = ?, mileage = ?, rating = ?, feedback = ? WHERE id = ?`,
     ts(started),
     ts(done),
     earned,
-    payment,
-    payment === 'paid' ? pick(['card', 'card', 'cash', 'mobile']) : null,
     20000 + Math.floor((200 - day) * 45 + rand() * 300),
     rating ?? (rand() < 0.5 ? 3 + Math.floor(rand() * 3) : null),
     feedback[Math.floor(rand() * feedback.length)],
     id,
   );
   B.recordProtections(db, id, ts(done));
+  // Payments: mostly one method, sometimes split (e.g. cash + JazzCash), sometimes only partly paid
+  const bill = db.get('SELECT * FROM bookings WHERE id = ?', id);
+  if (bill.total > 0 && payment !== 'unpaid') {
+    let list;
+    if (payment === 'partial') list = [{ method: 'Cash', amount: Math.round(bill.total / 2) }];
+    else if (rand() < 0.2) {
+      const cash = Math.min(bill.total, Math.round((bill.total * 0.4) / 100) * 100 || bill.total);
+      list = [{ method: 'Cash', amount: cash }, ...(bill.total - cash > 0 ? [{ method: pick(['JazzCash', 'Easypaisa', 'Card']), amount: Math.round((bill.total - cash) * 100) / 100 }] : [])];
+    } else list = [{ method: pick(['Cash', 'Cash', 'Cash', 'Card', 'JazzCash', 'Easypaisa', 'Bank transfer']), amount: bill.total }];
+    B.addPayments(db, bill, list, 'Administrator');
+    db.run('UPDATE payments SET created_at = ? WHERE booking_id = ?', ts(done), id);
+    db.run("UPDATE booking_events SET created_at = ? WHERE booking_id = ? AND note LIKE 'Payment:%'", ts(done), id);
+  }
   return id;
 }
 
@@ -153,11 +165,12 @@ db.tx(() => {
 
   // Today's queue
   const h = new Date().getHours();
-  makeBooking(vehicles[0], { day: 0, hour: 8, status: 'completed', payment: 'paid', rating: 5, pkg: 'Wash & Vacuum' });
-  makeBooking(vehicles[6], { day: 0, hour: 9, status: 'completed', payment: 'unpaid', pkg: 'Exterior Wash', addons: ['Tire Shine'] });
+  makeBooking(vehicles[0], { day: 0, hour: 8, status: 'completed', payment: 'paid', rating: 5, pkg: 'Service' });
+  makeBooking(vehicles[6], { day: 0, hour: 9, status: 'completed', payment: 'partial', pkg: 'Simple Polish', addons: ['Tire Shine'] });
+  makeBooking(vehicles[1], { day: 0, hour: 10, status: 'completed', payment: 'unpaid', pkg: 'Wash' });
   makeBooking(vehicles[7], { day: 1, hour: 9, status: 'in_progress', pkg: 'PPF – Front Package' }); // multi-day job started yesterday
   makeBooking(vehicles[2], { day: 0, hour: Math.min(h, 16), status: 'in_progress', pkg: 'Full Car Detailing' });
-  makeBooking(vehicles[5], { day: 0, hour: Math.min(17, h + 1), status: 'confirmed', pkg: 'Exterior Wash' });
+  makeBooking(vehicles[5], { day: 0, hour: Math.min(17, h + 1), status: 'confirmed', pkg: 'Wash' });
   makeBooking(vehicles[4], { day: 0, hour: Math.min(17, h + 2), status: 'pending', pkg: 'Interior Detailing' });
   // Upcoming: a 1-day ceramic coating
   makeBooking(vehicles[1], { day: -2, hour: 9, status: 'pending', pkg: 'Ceramic Coating – 1 Year' });

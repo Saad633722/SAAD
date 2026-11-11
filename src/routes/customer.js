@@ -23,8 +23,9 @@ module.exports = function customerRoutes(db) {
   /** Strip staff-only fields from a booking before sending it to a customer. */
   const forCustomer = (b) => {
     if (!b) return b;
-    const { admin_notes: _a, events, ...rest } = b;
+    const { admin_notes: _a, events, payments, ...rest } = b;
     if (events) rest.events = events.map(({ actor_name: _n, ...e }) => e);
+    if (payments) rest.payments = payments.map(({ id, amount, method, created_at }) => ({ id, amount, method, created_at }));
     return rest;
   };
 

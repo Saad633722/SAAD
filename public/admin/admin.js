@@ -40,6 +40,7 @@
   // =====================================================================
   async function openBooking(id, onChange) {
     const { booking: b, transitions } = await api('GET', `/api/admin/bookings/${id}`);
+    const closed = ['cancelled', 'no_show'].includes(b.status);
     const body = `
       <div class="grid grid-2">
         <div>
@@ -56,8 +57,8 @@
             ${b.points_earned ? `<dt>Points earned</dt><dd>${b.points_earned}</dd>` : ''}
             ${b.rating ? `<dt>Rating</dt><dd>${stars(b.rating)}${b.feedback ? `<br><small>“${esc(b.feedback)}”</small>` : ''}</dd>` : ''}
           </dl>
-          <h3 style="margin-top:16px">Services ${b.service_category ? UI.catBadge(b.service_category) : ''}</h3>
-          ${UI.priceLines(b)}
+          <div class="card-head" style="margin:16px 0 8px"><h3 style="margin:0">Bill ${b.service_category ? UI.catBadge(b.service_category) : ''}</h3>${closed ? '' : '<button type="button" class="btn btn-sm" data-pricing>✎ Price &amp; discount</button>'}</div>
+          ${UI.priceLines({ ...b, payments: [] })}
           ${b.customer_notes ? `<div class="note" style="margin-top:12px"><div class="meta">Customer note</div>${esc(b.customer_notes)}</div>` : ''}
           <h3 style="margin-top:16px">Activity</h3>
           ${UI.timeline(b.events)}
@@ -70,6 +71,27 @@
                   .join('')}</div>`
               : ''
           }
+          <h3>Payments</h3>
+          ${
+            b.balance < -0.004
+              ? `<div class="balance"><span>Refund due</span><span>${money(-b.balance)}</span></div>`
+              : `<div class="balance ${b.balance <= 0.004 ? 'settled' : ''}"><span>${b.balance <= 0.004 ? (closed ? 'Nothing to pay' : b.total > 0 ? 'Fully paid' : 'Nothing to pay') : 'Balance due'}</span><span>${money(Math.max(0, b.balance))}</span></div>`
+          }
+          ${
+            b.payments.length
+              ? `<ul class="payment-list">${b.payments
+                  .map(
+                    (p) => `<li><span><b>${p.amount < 0 ? 'Refund' : esc(money(p.amount))}</b>${p.amount < 0 ? ` ${esc(money(-p.amount))}` : ''} · ${esc(p.method)}${p.reference ? ` <small class="muted">#${esc(p.reference)}</small>` : ''}
+                    <br><small class="muted">${esc(fmtDateTime(p.created_at))}${p.received_by ? ` · ${esc(p.received_by)}` : ''}${p.note ? ` · ${esc(p.note)}` : ''}</small></span>
+                    <button type="button" class="btn btn-ghost btn-sm" data-del-payment="${p.id}" title="Remove (entered by mistake)">✕</button></li>`,
+                  )
+                  .join('')}</ul>`
+              : '<p class="muted" style="font-size:.9rem">No payments yet.</p>'
+          }
+          <div class="btn-row" style="margin-bottom:18px">
+            ${b.balance > 0.004 && !closed ? '<button type="button" class="btn btn-success btn-sm" data-pay>Take payment</button>' : ''}
+            ${b.amount_paid > 0 ? `<button type="button" class="btn btn-sm ${b.balance < -0.004 ? 'btn-primary' : ''}" data-refund>Refund</button>` : ''}
+          </div>
           <form data-edit>
             <div class="form-row">
               <div class="field"><label>Staff</label><select name="staff_id">${staffOptions(b.staff_id)}</select></div>
@@ -77,11 +99,7 @@
             </div>
             <div class="form-row">
               <div class="field"><label>Date &amp; time</label><input name="scheduled_at" type="datetime-local" value="${esc(b.scheduled_at.replace(' ', 'T'))}" ${['completed', 'cancelled', 'no_show'].includes(b.status) ? 'disabled' : ''}></div>
-              <div class="field"><label>Mileage</label><input name="mileage" type="number" min="0" value="${esc(b.mileage)}" placeholder="km / mi"></div>
-            </div>
-            <div class="form-row">
-              <div class="field"><label>Payment</label><select name="payment_status">${['unpaid', 'paid', 'refunded'].map((p) => `<option ${p === b.payment_status ? 'selected' : ''} value="${p}">${cap(p)}</option>`).join('')}</select></div>
-              <div class="field"><label>Method</label><select name="payment_method"><option value="">—</option>${UI.state.paymentMethods.map((p) => `<option ${p === b.payment_method ? 'selected' : ''} value="${p}">${cap(p)}</option>`).join('')}</select></div>
+              <div class="field"><label>Mileage</label><input name="mileage" type="number" min="0" value="${esc(b.mileage)}" placeholder="km"></div>
             </div>
             <div class="field"><label>Internal notes <small class="muted" style="display:inline">(not visible to customer)</small></label><textarea name="admin_notes" placeholder="Condition on arrival, issues, etc.">${esc(b.admin_notes)}</textarea></div>
             <button class="btn btn-primary" type="submit">Save changes</button>
@@ -99,32 +117,34 @@
       if (onChange) await onChange();
       await openBooking(id, onChange);
     };
+    const editPayload = (d) => {
+      const p = { staff_id: d.staff_id || null, bay: d.bay || null, mileage: d.mileage || null, admin_notes: d.admin_notes };
+      if (d.scheduled_at) p.scheduled_at = d.scheduled_at.replace('T', ' ');
+      return p;
+    };
     m.el.querySelectorAll('[data-status]').forEach((btn) =>
       btn.addEventListener('click', async () => {
         const status = btn.dataset.status;
-        let note;
         if (status === 'cancelled' || status === 'no_show') {
-          if (!(await confirmDialog(`${ACTION_LABEL[status]} for ${b.plate}?`, { okLabel: ACTION_LABEL[status], danger: true }))) return;
+          if (!(await confirmDialog(`${ACTION_LABEL[status]} for ${b.plate}?${b.amount_paid > 0 ? ` ${money(b.amount_paid)} has been paid — record a refund if needed.` : ''}`, { okLabel: ACTION_LABEL[status], danger: true }))) return;
         }
         try {
-          const patch = { status, status_note: note };
-          if (status === 'completed') {
-            const form = m.el.querySelector('[data-edit]');
-            Object.assign(patch, editPayload(UI.formData(form)));
-          }
-          await api('PATCH', `/api/admin/bookings/${id}`, patch);
+          const patch = { status };
+          if (status === 'completed') Object.assign(patch, editPayload(UI.formData(m.el.querySelector('[data-edit]'))));
+          const r = await api('PATCH', `/api/admin/bookings/${id}`, patch);
           toast(`Booking ${UI.STATUS[status].toLowerCase()}`, 'success');
+          if (status === 'completed' && r.booking.balance > 0.004) {
+            m.close();
+            if (onChange) await onChange();
+            paymentModal(r.booking, () => openBooking(id, onChange).then(() => onChange && onChange()));
+            return;
+          }
           await reload();
         } catch (e) {
           toast(e.message, 'error');
         }
       }),
     );
-    const editPayload = (d) => {
-      const p = { staff_id: d.staff_id || null, bay: d.bay || null, mileage: d.mileage || null, payment_status: d.payment_status, payment_method: d.payment_method || null, admin_notes: d.admin_notes };
-      if (d.scheduled_at) p.scheduled_at = d.scheduled_at.replace('T', ' ');
-      return p;
-    };
     m.el.querySelector('[data-edit]').addEventListener('submit', async (e) => {
       e.preventDefault();
       try {
@@ -135,7 +155,192 @@
         toast(ex.message, 'error');
       }
     });
+    m.el.querySelector('[data-pricing]')?.addEventListener('click', () => pricingModal(b, reload));
+    m.el.querySelector('[data-pay]')?.addEventListener('click', () => paymentModal(b, reload));
+    m.el.querySelector('[data-refund]')?.addEventListener('click', () => paymentModal(b, reload, { refund: true }));
+    m.el.querySelectorAll('[data-del-payment]').forEach((btn) =>
+      btn.addEventListener('click', async () => {
+        const p = b.payments.find((x) => x.id === Number(btn.dataset.delPayment));
+        if (!(await confirmDialog(`Remove the ${money(Math.abs(p.amount))} ${p.method} ${p.amount < 0 ? 'refund' : 'payment'}? Only do this if it was entered by mistake.`, { okLabel: 'Remove', danger: true }))) return;
+        try {
+          await api('DELETE', `/api/admin/payments/${p.id}`);
+          toast('Payment removed', 'success');
+          await reload();
+        } catch (e) {
+          toast(e.message, 'error');
+        }
+      }),
+    );
     m.el.querySelector('[data-print]').addEventListener('click', () => printReceipt(b));
+  }
+
+  const LARGE = ['suv', 'pickup', 'van'];
+  const r2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+  /** Same order as the server: subtotal -> size surcharge -> staff discount -> points -> tax. */
+  function billPreview({ subtotal, vehicleType, applySurcharge, discountType, discountValue, pointsDiscount = 0 }) {
+    const st = UI.state.settings;
+    const surcharge = applySurcharge && LARGE.includes(vehicleType) ? r2((subtotal * Number(st.large_vehicle_surcharge || 0)) / 100) : 0;
+    const gross = r2(subtotal + surcharge);
+    const v = Math.max(0, Number(discountValue) || 0);
+    const manual = discountType === 'percent' ? r2((gross * Math.min(v, 100)) / 100) : r2(Math.min(v, gross));
+    const points = r2(Math.min(pointsDiscount, gross - manual));
+    const taxable = Math.max(0, gross - manual - points);
+    const tax = r2((taxable * Number(st.tax_rate || 0)) / 100);
+    return { subtotal: r2(subtotal), surcharge, manual, points, tax, total: r2(taxable + tax) };
+  }
+
+  function previewHtml(t) {
+    const row = (k, v) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`;
+    return `<table class="price-lines"><tbody>${row('Subtotal', money(t.subtotal))}${t.surcharge ? row('Size surcharge', money(t.surcharge)) : ''}${t.manual ? row('Discount', '−' + money(t.manual)) : ''}${t.points ? row('Loyalty points', '−' + money(t.points)) : ''}${t.tax ? row('Tax', money(t.tax)) : ''}
+      <tr class="total"><td>Total</td><td>${esc(money(t.total))}</td></tr></tbody></table>`;
+  }
+
+  const discountFields = (type = 'amount', value = '', reason = '') => `
+    <div class="form-row">
+      <div class="field"><label>Discount</label><div class="input-group"><select name="discount_type"><option value="amount" ${type === 'amount' ? 'selected' : ''}>${esc(UI.state.settings.currency)}</option><option value="percent" ${type === 'percent' ? 'selected' : ''}>%</option></select><input name="discount_value" type="number" min="0" step="any" value="${esc(value)}" placeholder="0"></div></div>
+      <div class="field"><label>Reason</label><input name="discount_reason" maxlength="200" value="${esc(reason)}" placeholder="e.g. Regular customer, owner's friend"></div>
+    </div>`;
+
+  /** Change prices: package price, each extra (or remove it), add catalog extras or custom items, surcharge and discount. */
+  function pricingModal(b, onDone) {
+    const addons = cache.services.filter((x) => x.kind === 'addon' && x.active);
+    const pointsDiscount = r2(b.discount - b.manual_discount);
+    const large = LARGE.includes(b.vehicle_type);
+    let custom = 0;
+    const lineHtml = (key, { name, price, editableName, ref }) => `
+      <div class="line-edit" data-line="${key}" ${ref ? `data-ref='${esc(JSON.stringify(ref))}'` : ''}>
+        ${editableName ? `<input data-name value="${esc(name)}" placeholder="Item name" maxlength="80">` : `<span class="name">+ ${esc(name)}</span>`}
+        <input data-price type="number" min="0" step="any" value="${esc(price)}">
+        <button type="button" class="btn btn-ghost btn-sm" data-remove title="Remove">✕</button>
+      </div>`;
+    modal({
+      title: `Price & discount — ${b.code}`,
+      wide: true,
+      submitLabel: 'Save prices',
+      body: `
+        <p class="muted" style="margin-top:0">Prices depend on the vehicle — enter what you are charging. ${pointsDiscount > 0 ? `${money(pointsDiscount)} of loyalty points stays applied.` : ''}</p>
+        <div class="line-edit"><span class="name">${esc(b.service_name)}</span><input name="service_price" type="number" min="0" step="any" value="${esc(b.service_price)}" required><span></span></div>
+        <div data-lines>${b.addons.map((a) => lineHtml(`a${a.id}`, { name: a.name, price: a.price, editableName: !a.service_id, ref: { id: a.id } })).join('')}</div>
+        <div class="btn-row" style="margin:6px 0 16px">
+          <select data-add-extra style="width:auto"><option value="">+ Add an extra…</option>${addons.map((a) => `<option value="${a.id}">${esc(a.name)} (${money(a.price)})</option>`).join('')}</select>
+          <button type="button" class="btn btn-sm" data-add-custom>+ Custom item</button>
+        </div>
+        ${large ? `<label class="check" style="margin-bottom:12px"><input type="checkbox" name="apply_surcharge" ${b.surcharge > 0 ? 'checked' : ''}> Add size surcharge (${esc(UI.state.settings.large_vehicle_surcharge)}% for ${esc(cap(b.vehicle_type))})</label>` : ''}
+        ${discountFields(b.manual_discount ? b.discount_type || 'amount' : 'amount', b.manual_discount ? b.discount_value || b.manual_discount : '', b.discount_reason || '')}
+        <div class="bill-preview" data-preview></div>
+        ${b.amount_paid > 0 ? `<small class="muted">Already paid: ${money(b.amount_paid)}. If the new total is lower, the difference shows as a refund due.</small>` : ''}`,
+      onOpen: (el) => {
+        const lines = el.querySelector('[data-lines]');
+        const update = () => {
+          const items = [...lines.querySelectorAll('[data-line]')].reduce((sum, row) => sum + (Number(row.querySelector('[data-price]').value) || 0), 0);
+          const t = billPreview({
+            subtotal: (Number(el.querySelector('[name=service_price]').value) || 0) + items,
+            vehicleType: b.vehicle_type,
+            applySurcharge: large ? el.querySelector('[name=apply_surcharge]').checked : false,
+            discountType: el.querySelector('[name=discount_type]').value,
+            discountValue: el.querySelector('[name=discount_value]').value,
+            pointsDiscount,
+          });
+          el.querySelector('[data-preview]').innerHTML = previewHtml(t);
+        };
+        el.addEventListener('input', update);
+        el.addEventListener('change', update);
+        lines.addEventListener('click', (e) => {
+          if (e.target.closest('[data-remove]')) {
+            e.target.closest('[data-line]').remove();
+            update();
+          }
+        });
+        el.querySelector('[data-add-extra]').addEventListener('change', (e) => {
+          const a = addons.find((x) => x.id === Number(e.target.value));
+          if (!a) return;
+          lines.insertAdjacentHTML('beforeend', lineHtml(`s${a.id}-${custom++}`, { name: a.name, price: a.price, ref: { service_id: a.id } }));
+          e.target.value = '';
+          update();
+        });
+        el.querySelector('[data-add-custom]').addEventListener('click', () => {
+          lines.insertAdjacentHTML('beforeend', lineHtml(`c${custom++}`, { name: '', price: '', editableName: true }));
+          lines.lastElementChild.querySelector('[data-name]').focus();
+          update();
+        });
+        update();
+      },
+      onSubmit: async (d, form) => {
+        const items = [...form.querySelectorAll('[data-lines] [data-line]')].map((row) => {
+          const ref = row.dataset.ref ? JSON.parse(row.dataset.ref) : {};
+          const nameInput = row.querySelector('[data-name]');
+          return { ...ref, ...(nameInput ? { name: nameInput.value } : {}), price: row.querySelector('[data-price]').value };
+        });
+        await api('PUT', `/api/admin/bookings/${b.id}/pricing`, {
+          service_price: d.service_price,
+          items,
+          apply_surcharge: large ? d.apply_surcharge : false,
+          discount_type: d.discount_type,
+          discount_value: d.discount_value || 0,
+          discount_reason: d.discount_reason,
+        });
+        toast('Prices updated', 'success');
+        await onDone();
+      },
+    });
+  }
+
+  /** Take a payment, optionally split over several methods (e.g. part cash, part JazzCash). Or record a refund. */
+  function paymentModal(b, onDone, { refund = false } = {}) {
+    const methods = UI.state.paymentMethods;
+    const due = refund ? (b.balance < -0.004 ? r2(-b.balance) : r2(b.amount_paid)) : r2(b.total - b.amount_paid);
+    const rowHtml = (amount, method = methods[0]) => `
+      <div class="pay-row" data-pay-row>
+        <select data-method>${methods.map((x) => `<option ${x === method ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select>
+        <input data-amount type="number" min="0" step="any" value="${esc(amount)}" placeholder="Amount">
+        <input class="ref" data-ref placeholder="Reference / TID (optional)" maxlength="80">
+        <button type="button" class="btn btn-ghost btn-sm" data-remove-row title="Remove">✕</button>
+      </div>`;
+    modal({
+      title: refund ? `Refund — ${b.code}` : `Take payment — ${b.code}`,
+      submitLabel: refund ? 'Record refund' : 'Record payment',
+      wide: true,
+      body: `
+        <div class="balance ${refund ? 'settled' : ''}"><span>${refund ? (b.balance < -0.004 ? 'Refund due' : 'Paid so far') : 'Balance due'}</span><span>${money(due)}</span></div>
+        ${refund ? `<p class="muted" style="margin-top:0">Paid so far: ${money(b.amount_paid)}. For a goodwill reduction, lower the price with “Price &amp; discount” first — the difference then shows as a refund due.</p>` : ''}
+        <div data-rows>${rowHtml(due)}</div>
+        ${refund ? '' : '<button type="button" class="btn btn-sm" data-split>+ Split with another method</button>'}
+        <div class="field" style="margin-top:12px"><label>Note</label><input name="note" maxlength="200" placeholder="${refund ? 'Reason for the refund' : 'Optional'}"></div>
+        <div class="muted" data-remaining></div>`,
+      onOpen: (el) => {
+        const rows = el.querySelector('[data-rows]');
+        const sum = () => [...rows.querySelectorAll('[data-amount]')].reduce((s, i) => s + (Number(i.value) || 0), 0);
+        const update = () => {
+          const left = r2(due - sum());
+          el.querySelector('[data-remaining]').textContent = refund ? '' : left > 0 ? `Still due after this: ${money(left)}` : left < 0 ? `That is ${money(-left)} more than the balance.` : 'This settles the bill.';
+        };
+        el.addEventListener('input', update);
+        el.querySelector('[data-split]')?.addEventListener('click', () => {
+          const used = new Set([...rows.querySelectorAll('[data-method]')].map((s) => s.value));
+          rows.insertAdjacentHTML('beforeend', rowHtml(Math.max(0, r2(due - sum())) || '', methods.find((x) => !used.has(x)) || methods[0]));
+          rows.lastElementChild.querySelector('[data-amount]').select();
+          update();
+        });
+        rows.addEventListener('click', (e) => {
+          if (e.target.closest('[data-remove-row]') && rows.children.length > 1) {
+            e.target.closest('[data-pay-row]').remove();
+            update();
+          }
+        });
+        update();
+      },
+      onSubmit: async (d, form) => {
+        const payments = [...form.querySelectorAll('[data-pay-row]')]
+          .map((row) => ({ method: row.querySelector('[data-method]').value, amount: Number(row.querySelector('[data-amount]').value) || 0, reference: row.querySelector('[data-ref]').value, note: d.note }))
+          .filter((p) => p.amount > 0)
+          .map((p) => (refund ? { ...p, amount: -p.amount } : p));
+        if (!payments.length) throw new Error('Enter an amount.');
+        await api('POST', `/api/admin/bookings/${b.id}/payments`, { payments });
+        toast(refund ? 'Refund recorded' : 'Payment recorded', 'success');
+        await onDone();
+      },
+    });
   }
 
   function printReceipt(b) {
@@ -181,6 +386,13 @@
         )
         .join('')}</select></div>
       <div class="field"><label>Extras</label><div class="grid grid-2" style="gap:6px">${addons.map((a) => `<label class="check"><input type="checkbox" name="addon_ids" value="${a.id}" data-array> ${esc(a.name)} <span class="muted">${money(a.price)}</span></label>`).join('')}</div></div>
+      <h3>Price</h3>
+      <div class="form-row">
+        <div class="field"><label>Package price (${esc(UI.state.settings.currency)})</label><input name="service_price" type="number" min="0" step="any" required><small class="muted">Change it to match the vehicle (see your rate list).</small></div>
+        <div class="field"><label>&nbsp;</label><label class="check"><input type="checkbox" name="apply_surcharge" ${vehicle && !LARGE.includes(vehicle.type) ? '' : 'checked'}> Add size surcharge for SUV / pickup / van (${esc(UI.state.settings.large_vehicle_surcharge)}%)</label></div>
+      </div>
+      ${discountFields()}
+      <div class="bill-preview" data-preview style="margin-bottom:14px"></div>
       <h3>When &amp; who</h3>
       <label class="check" style="margin-bottom:10px"><input type="checkbox" name="start_now" checked> Start the job now (car is here)</label>
       <div class="field" data-when style="display:none"><label>Scheduled for</label><input type="datetime-local" name="scheduled_at" value="${now.toISOString().slice(0, 16)}"></div>
@@ -189,10 +401,7 @@
         <div class="field"><label>Bay</label><input type="number" min="1" name="bay"></div>
         <div class="field"><label>Mileage</label><input type="number" min="0" name="mileage"></div>
       </div>
-      <div class="form-row">
-        <div class="field"><label>Extra discount (${esc(UI.state.settings.currency)})</label><input type="number" min="0" step="0.01" name="discount" placeholder="0.00"></div>
-        <div class="field"><label>Internal notes</label><input name="admin_notes" placeholder="e.g. scratch on driver door"></div>
-      </div>`;
+      <div class="field"><label>Internal notes</label><input name="admin_notes" placeholder="e.g. scratch on driver door"></div>`;
     modal({
       title: 'New booking / walk-in',
       body,
@@ -201,6 +410,27 @@
       onOpen: (el) => {
         const cb = el.querySelector('[name=start_now]');
         cb.addEventListener('change', () => (el.querySelector('[data-when]').style.display = cb.checked ? 'none' : ''));
+        const pkg = el.querySelector('[name=service_id]');
+        const price = el.querySelector('[name=service_price]');
+        const setPrice = () => (price.value = packages.find((x) => x.id === Number(pkg.value))?.price ?? '');
+        pkg.addEventListener('change', setPrice);
+        setPrice();
+        const update = () => {
+          const extras = [...el.querySelectorAll('[name=addon_ids]:checked')].reduce((sum, i) => sum + (addons.find((a) => a.id === Number(i.value))?.price || 0), 0);
+          const type = vehicle ? vehicle.type : el.querySelector('[name=type]')?.value;
+          el.querySelector('[data-preview]').innerHTML = previewHtml(
+            billPreview({
+              subtotal: (Number(price.value) || 0) + extras,
+              vehicleType: type,
+              applySurcharge: el.querySelector('[name=apply_surcharge]').checked,
+              discountType: el.querySelector('[name=discount_type]').value,
+              discountValue: el.querySelector('[name=discount_value]').value,
+            }),
+          );
+        };
+        el.addEventListener('input', update);
+        el.addEventListener('change', update);
+        update();
       },
       onSubmit: async (d) => {
         const payload = {
@@ -211,7 +441,11 @@
           staff_id: d.staff_id || null,
           bay: d.bay || null,
           mileage: d.mileage || null,
-          discount: d.discount || 0,
+          service_price: d.service_price,
+          apply_surcharge: d.apply_surcharge,
+          discount_type: d.discount_type,
+          discount_value: d.discount_value || 0,
+          discount_reason: d.discount_reason,
           admin_notes: d.admin_notes,
         };
         if (vehicle) payload.vehicle_id = vehicle.id;
@@ -253,7 +487,7 @@
         <td>${esc(b.staff_name || '—')}${b.bay ? `<br><small>Bay ${b.bay}</small>` : ''}</td>
         <td>${statusBadge(b.status)}</td>
         <td class="num">${money(b.total)}</td>
-        <td class="num">${next ? `<button class="btn btn-sm ${next[0] === 'completed' ? 'btn-success' : 'btn-primary'}" data-quick="${b.id}" data-to="${next[0]}">${next[1]}</button>` : b.status === 'completed' && b.payment_status === 'unpaid' ? `<button class="btn btn-sm" data-paid="${b.id}">Mark paid</button>` : ''}</td>
+        <td class="num">${next ? `<button class="btn btn-sm ${next[0] === 'completed' ? 'btn-success' : 'btn-primary'}" data-quick="${b.id}" data-to="${next[0]}">${next[1]}</button>` : b.status === 'completed' && ['unpaid', 'partial'].includes(b.payment_status) ? `<button class="btn btn-sm btn-success" data-paid="${b.id}">Take payment</button>${b.payment_status === 'partial' ? `<br><small class="muted">${money(b.total - b.amount_paid)} due</small>` : ''}` : ''}</td>
       </tr>`;
     };
     setPage(`
@@ -261,7 +495,7 @@
       <div class="grid grid-4">
         <div class="card stat"><span class="label">Today's bookings</span><span class="value">${t.total || 0}</span><span class="sub">${t.waiting || 0} waiting · ${t.in_progress || 0} in progress · ${t.completed || 0} done</span></div>
         <div class="card stat"><span class="label">Revenue today</span><span class="value">${money(t.revenue)}</span><span class="sub">This month: ${money(s.month.revenue)}</span></div>
-        <div class="card stat"><span class="label">Unpaid completed</span><span class="value">${s.unpaid.count}</span><span class="sub">${money(s.unpaid.amount)} outstanding</span></div>
+        <div class="card stat"><span class="label">Collected today</span><span class="value">${money(s.collected_today.reduce((sum, m) => sum + m.amount, 0))}</span><span class="sub">${s.collected_today.length ? s.collected_today.map((m) => `${esc(m.method)} ${money(m.amount)}`).join(' · ') : 'No payments yet'}${s.unpaid.count ? `<br><a href="#/bookings?payment=due">${money(s.unpaid.amount)} still due on ${s.unpaid.count} job${s.unpaid.count === 1 ? '' : 's'}</a>` : ''}</span></div>
         <div class="card stat"><span class="label">Customer rating</span><span class="value">${s.totals.avg_rating ? `${s.totals.avg_rating} ★` : '—'}</span><span class="sub">${s.totals.customers} customers · ${s.totals.vehicles} vehicles</span></div>
       </div>
       ${s.totals.pending_total ? `<div class="alert info" style="margin-top:16px">${s.totals.pending_total} online booking${s.totals.pending_total > 1 ? 's are' : ' is'} waiting for confirmation. <a href="#/bookings?status=pending">Review →</a></div>` : ''}
@@ -286,7 +520,7 @@
     main.querySelectorAll('[data-followup]').forEach((btn) =>
       btn.addEventListener('click', () => {
         const f = s.followups.find((x) => x.id === Number(btn.dataset.followup));
-        newBooking({ vehicle: { id: f.vehicle_id, plate: f.plate, make: f.make, model: f.model, year: f.year, owner_name: f.owner_name }, onDone: dashboard });
+        newBooking({ vehicle: { id: f.vehicle_id, plate: f.plate, make: f.make, model: f.model, year: f.year, type: f.type, owner_name: f.owner_name }, onDone: dashboard });
       }),
     );
     main.querySelectorAll('[data-booking]').forEach((tr) => tr.addEventListener('click', (e) => !e.target.closest('button, a') && openBooking(tr.dataset.booking, dashboard)));
@@ -304,17 +538,9 @@
       }),
     );
     main.querySelectorAll('[data-paid]').forEach((btn) =>
-      btn.addEventListener('click', () => {
-        modal({
-          title: 'Record payment',
-          body: `<div class="field"><label>Payment method</label><select name="payment_method">${UI.state.paymentMethods.map((p) => `<option value="${p}">${cap(p)}</option>`).join('')}</select></div>`,
-          submitLabel: 'Mark as paid',
-          onSubmit: async (d) => {
-            await api('PATCH', `/api/admin/bookings/${btn.dataset.paid}`, { payment_status: 'paid', payment_method: d.payment_method });
-            toast('Payment recorded', 'success');
-            dashboard();
-          },
-        });
+      btn.addEventListener('click', async () => {
+        const { booking } = await api('GET', `/api/admin/bookings/${btn.dataset.paid}`);
+        paymentModal(booking, dashboard);
       }),
     );
   }
@@ -330,7 +556,7 @@
         <form class="filters" data-filters>
           <input type="search" name="q" placeholder="Search plate, code, customer, phone…" value="${esc(q.q)}">
           <select name="status"><option value="">All statuses</option><option value="active" ${q.status === 'active' ? 'selected' : ''}>Active (not finished)</option>${Object.entries(UI.STATUS).map(([k, v]) => `<option value="${k}" ${q.status === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
-          <select name="payment"><option value="">Any payment</option><option value="unpaid" ${q.payment === 'unpaid' ? 'selected' : ''}>Unpaid</option><option value="paid" ${q.payment === 'paid' ? 'selected' : ''}>Paid</option><option value="refunded" ${q.payment === 'refunded' ? 'selected' : ''}>Refunded</option></select>
+          <select name="payment"><option value="">Any payment</option>${[['due', 'Balance due'], ['unpaid', 'Unpaid'], ['partial', 'Partly paid'], ['paid', 'Paid'], ['refunded', 'Refunded']].map(([k, l]) => `<option value="${k}" ${q.payment === k ? 'selected' : ''}>${l}</option>`).join('')}</select>
           <input type="date" name="from" value="${esc(q.from)}" title="From">
           <input type="date" name="to" value="${esc(q.to)}" title="To">
           <button class="btn" type="submit">Filter</button>
@@ -870,7 +1096,7 @@
         <a class="btn btn-ghost" href="#/reports?from=${monthStart}&to=${UI.localDate()}">This month</a><a class="btn btn-ghost" href="${preset(365)}">12 months</a>
       </form></div>
       <div class="grid grid-4" style="margin-top:16px">
-        <div class="card stat"><span class="label">Revenue</span><span class="value">${money(s.revenue)}</span><span class="sub">Discounts ${money(s.discounts)} · tax ${money(s.tax)}</span></div>
+        <div class="card stat"><span class="label">Revenue</span><span class="value">${money(s.revenue)}</span><span class="sub">Discounts ${money(s.discounts)} (staff ${money(s.manual_discounts)}) · tax ${money(s.tax)}</span></div>
         <div class="card stat"><span class="label">Completed jobs</span><span class="value">${s.completed || 0}</span><span class="sub">${s.unique_vehicles || 0} unique vehicles</span></div>
         <div class="card stat"><span class="label">Average ticket</span><span class="value">${money(s.avg_ticket)}</span><span class="sub">${s.online || 0} online · ${s.walk_ins || 0} walk-in</span></div>
         <div class="card stat"><span class="label">Cancelled / no-show</span><span class="value">${s.cancelled || 0} / ${s.no_shows || 0}</span><span class="sub">of ${s.bookings || 0} bookings · rating ${s.avg_rating ? `${s.avg_rating} ★` : '—'}</span></div>
@@ -882,7 +1108,8 @@
         <div class="card"><div class="card-head"><h2>Packages</h2></div>${UI.hbars(r.by_service.map((x) => ({ name: `${x.name} (${x.count})`, value: x.revenue, display: money(x.revenue) })))}</div>
         <div class="card"><div class="card-head"><h2>Add-ons</h2></div>${UI.hbars(r.by_addon.map((x) => ({ name: `${x.name} (${x.count})`, value: x.revenue, display: money(x.revenue) })))}</div>
         <div class="card"><div class="card-head"><h2>Staff performance</h2></div>${simpleTable(r.by_staff, [['Staff', (x) => esc(x.name)], ['Jobs', (x) => x.count, 1], ['Revenue', (x) => money(x.revenue), 1], ['Rating', (x) => (x.avg_rating ? `${x.avg_rating} ★` : '—'), 1]])}</div>
-        <div class="card"><div class="card-head"><h2>Payments</h2></div>${simpleTable(r.by_payment, [['Method', (x) => esc(cap(x.method))], ['Status', (x) => payBadge(x.status)], ['Count', (x) => x.count, 1], ['Amount', (x) => money(x.amount), 1]])}</div>
+        <div class="card"><div class="card-head"><h2>Payments</h2></div>${simpleTable(r.by_payment, [['Method', (x) => esc(x.method)], ['Payments', (x) => x.count, 1], ['Received', (x) => money(x.received), 1], ['Refunded', (x) => (x.refunded ? money(x.refunded) : '—'), 1], ['Net', (x) => `<b>${money(x.amount)}</b>`, 1]])}
+          <div class="muted" style="margin-top:8px">Collected in this period: <b>${money(s.collected)}</b> · still due on jobs in this period: <b>${money(s.outstanding)}</b></div></div>
         <div class="card"><div class="card-head"><h2>Busiest hours</h2></div>${r.by_hour.length ? UI.barChart(r.by_hour.map((h) => ({ label: `${h.hour}h`, value: h.count, title: `${h.hour}:00 — ${h.count} jobs` }))) : '<div class="empty">No data.</div>'}</div>
         <div class="card"><div class="card-head"><h2>Vehicle types</h2></div>${UI.hbars(r.by_vehicle_type.map((x) => ({ name: cap(x.type), value: x.count, display: `${x.count} · ${money(x.revenue)}` })))}</div>
       </div>`);
@@ -905,7 +1132,8 @@
         <div class="card"><h2>Business</h2>
           <div class="form-row"><div class="field"><label>Business name</label><input name="business_name" value="${esc(s.business_name)}"></div><div class="field"><label>Tagline</label><input name="tagline" value="${esc(s.tagline)}" placeholder="& PPF Ceramic Coating"></div></div>
           <div class="form-row"><div class="field"><label>Phone</label><input name="phone" value="${esc(s.phone)}" placeholder="Shown on the sign-in page and receipts"></div><div class="field"><label>Address</label><input name="address" value="${esc(s.address)}"></div></div>
-          <div class="form-row"><div class="field"><label>Currency symbol</label><input name="currency" value="${esc(s.currency)}" maxlength="4"><small class="muted">e.g. $, Rs, AED, £, €</small></div></div>
+          <div class="form-row"><div class="field"><label>Currency symbol</label><input name="currency" value="${esc(s.currency)}" maxlength="4"><small class="muted">e.g. Rs, $, AED, £</small></div>
+            <div class="field"><label>Payment methods</label><input name="payment_methods" value="${esc((s.payment_methods || []).join(', '))}"><small class="muted">Comma-separated, e.g. Cash, Card, JazzCash, Easypaisa, Bank transfer, Raast. Bills can be split across several.</small></div></div>
         </div>
         <div class="card"><h2>Opening hours &amp; capacity</h2>
           <div class="form-row form-row-3">
@@ -925,7 +1153,7 @@
         </div>
         <div class="card"><h2>Loyalty programme</h2>
           <div class="form-row form-row-3">
-            <div class="field"><label>Points per ${esc(s.currency)}1 spent</label><input type="number" min="0" step="0.1" name="points_per_unit" value="${esc(s.points_per_unit)}"></div>
+            <div class="field"><label>Points per ${esc(s.currency)}1 spent</label><input type="number" min="0" step="any" name="points_per_unit" value="${esc(s.points_per_unit)}"></div>
             <div class="field"><label>Points for a reward</label><input type="number" min="0" name="reward_points" value="${esc(s.reward_points)}"></div>
             <div class="field"><label>Reward value (${esc(s.currency)})</label><input type="number" min="0" step="0.01" name="reward_value" value="${esc(s.reward_value)}"></div>
           </div>

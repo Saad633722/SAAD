@@ -42,9 +42,13 @@
   const ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
   const esc = (v) => (v === null || v === undefined ? '' : String(v).replace(/[&<>"']/g, (c) => ESC[c]));
 
+  /** "Rs 1,500", "Rs 52.50", "$15" — no decimals for whole amounts, a space after word-like symbols. */
   const money = (n) => {
-    const v = Number(n || 0);
-    return `${state.settings.currency || '$'}${v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    const v = Math.round(Number(n || 0) * 100) / 100;
+    const cur = state.settings.currency ?? 'Rs';
+    const digits = Number.isInteger(v) ? 0 : 2;
+    const num = Math.abs(v).toLocaleString('en', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+    return `${v < 0 ? '−' : ''}${cur}${/[A-Za-z.]$/.test(cur) ? ' ' : ''}${num}`;
   };
 
   const parse = (s) => (s ? new Date(String(s).replace(' ', 'T')) : null);
@@ -73,7 +77,8 @@
     no_show: 'No-show',
   };
   const statusBadge = (s) => `<span class="badge ${esc(s)}">${esc(STATUS[s] || s)}</span>`;
-  const payBadge = (s) => `<span class="badge ${esc(s)}">${esc(s ? s[0].toUpperCase() + s.slice(1) : '')}</span>`;
+  const PAY = { unpaid: 'Unpaid', partial: 'Partly paid', paid: 'Paid', refunded: 'Refunded' };
+  const payBadge = (s) => `<span class="badge ${esc(s)}">${esc(PAY[s] || cap(s))}</span>`;
   const plate = (p, cls = '') => `<span class="plate ${cls}">${esc(p)}</span>`;
   const stars = (n) => (n ? `<span class="stars" title="${n}/5">${'★'.repeat(n)}${'☆'.repeat(5 - n)}</span>` : '');
   const cap = (s) => (s === 'suv' ? 'SUV' : s ? String(s)[0].toUpperCase() + String(s).slice(1).replace(/_/g, ' ') : '');
@@ -199,6 +204,8 @@
         if (m) {
           const params = Object.fromEntries(r.keys.map((k, i) => [k, decodeURIComponent(m[i + 1])]));
           document.body.classList.remove('nav-open');
+          document.querySelectorAll('.modal-backdrop').forEach((m) => m.remove());
+          document.body.classList.remove('modal-open');
           if (onChange) onChange(path);
           try {
             await r.handler(params, query);
@@ -277,10 +284,15 @@
     for (const a of b.addons || []) rows.push([`+ ${a.name}`, money(a.price)]);
     if (!b.service_name) rows.push(['Subtotal', money(b.subtotal)]);
     if (b.surcharge) rows.push(['Large vehicle surcharge', money(b.surcharge)]);
-    if (b.discount) rows.push([`Discount${b.points_redeemed ? ` (${b.points_redeemed} pts)` : ''}`, '−' + money(b.discount)]);
+    const manual = Number(b.manual_discount ?? b.manualDiscount ?? 0);
+    const points = Math.round((Number(b.discount || 0) - manual) * 100) / 100;
+    if (manual) rows.push([`Discount${b.discount_reason ? ` (${b.discount_reason})` : ''}`, '−' + money(manual)]);
+    if (points > 0) rows.push([`Loyalty points${b.points_redeemed ? ` (${b.points_redeemed} pts)` : ''}`, '−' + money(points)]);
     if (b.tax) rows.push(['Tax', money(b.tax)]);
+    const pays = (b.payments || []).map((p) => `<tr class="pay"><td>${p.amount < 0 ? 'Refund' : 'Paid'} · ${esc(p.method)} <small class="muted">${esc(fmtShortDate(p.created_at))}</small></td><td>${p.amount < 0 ? '+' : '−'}${esc(money(Math.abs(p.amount)))}</td></tr>`);
+    const balance = b.balance !== undefined && (b.payments || []).length ? `<tr class="total"><td>Balance due</td><td>${esc(money(b.balance))}</td></tr>` : '';
     return `<table class="price-lines"><tbody>${rows.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join('')}
-      <tr class="total"><td>Total</td><td>${esc(money(b.total))}</td></tr></tbody></table>`;
+      <tr class="total"><td>Total</td><td>${esc(money(b.total))}</td></tr>${pays.join('')}${balance}</tbody></table>`;
   }
 
   function timeline(events) {

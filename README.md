@@ -28,7 +28,7 @@ Sign in at <http://localhost:3000>. The app sends each user to the right panel f
 
 > **Change the admin password** under Settings, or set `ADMIN_EMAIL` and `ADMIN_PASSWORD` before the first start.
 
-> **Prices are placeholders.** The starter price list (in `$`) is only an example. Set your currency and contact details under **Settings**, and your real prices, work times and warranties under **Services & pricing**.
+> **Prices.** The *Wash* (Rs 500) and *Service* (Rs 700) prices are the standard-car rates from the Star Workers Service Station Union rate list (Rawalpindi/Islamabad). The detailing, ceramic coating and PPF prices are placeholders — set your real prices, work times and warranties under **Services & pricing**, and your phone, address and opening hours under **Settings**. Staff can always change the price of any job at the counter.
 
 ## Features
 
@@ -38,8 +38,21 @@ Sign in at <http://localhost:3000>. The app sends each user to the right panel f
 - **Warranties and maintenance**: when a coating or PPF job is completed, the car automatically gets a protection record with the applied date, warranty end date and next maintenance visit. Older work can be added by hand.
 - **Follow-ups**: the admin dashboard lists cars whose maintenance visit is due or overdue, and warranties ending within 30 days. Each one shows the owner's phone number and a one-click "Book visit". Customers see the same reminder on their home page.
 
+### Pricing, discounts and payments
+- **Manual prices**: prices depend on the vehicle (see the rate list), so staff can set the package price when booking a walk-in, and later change any line on the bill with **Price & discount**. They can also remove extras, add catalog extras, or add **custom items** such as "Shampoo (charged separately)".
+- **Size surcharge**: optional for SUVs, pickups and vans (50% by default), switchable per booking.
+- **Discounts**: as an amount (Rs) or a percentage, with a reason that appears on the receipt. A percentage discount stays a percentage when prices change. Every price change is logged in the booking's activity with who made it.
+- **Split payments**: take payment with **several methods for one bill** (e.g. Rs 500 cash + Rs 1,000 JazzCash), with an optional reference / TID. Partial payments leave a **balance due**.
+- **Refunds**: record a refund to any method. If the price is lowered after paying, the bill shows **Refund due**. A payment entered by mistake can be removed (the removal is logged).
+- **Payment methods** are set in Settings (default: Cash, Card, JazzCash, Easypaisa, Bank transfer).
+- The dashboard shows money **collected today by method**, plus what is still due. Reports show received / refunded / net per method, the amount outstanding, and staff discounts. The CSV export includes paid, balance and methods.
+
+| Price & discount | Split payment |
+|---|---|
+| ![Pricing](docs/screenshots/admin-pricing.png) | ![Split payment](docs/screenshots/admin-split-payment.png) |
+
 ### Admin panel
-- **Dashboard**: today's queue with one-click *Confirm → Start job → Complete* and *Mark paid*; revenue; unpaid jobs; rating; follow-ups; a 14-day revenue chart; top packages; latest feedback.
+- **Dashboard**: today's queue with one-click *Confirm → Start job → Complete* and *Take payment*; revenue; money collected today by method; rating; follow-ups; a 14-day revenue chart; top packages; latest feedback.
 - **Bookings**: search and filters. The booking detail covers status changes, staff and bay, rescheduling, mileage, payment, internal notes, an activity timeline and a printable receipt.
 - **Walk-ins**: type the plate; a car that has visited before is recognised and its history continues.
 - **🚗 Vehicles & history**: every car, with:
@@ -111,7 +124,7 @@ test/api.test.js       API tests (node:test)
 npm test
 ```
 
-The tests cover multi-day bay scheduling, warranty and maintenance tracking, follow-ups, database upgrades, authentication and role protection, vehicle ownership, pricing and surcharges, slot capacity, the booking lifecycle, loyalty points (earning, redeeming and refunding), walk-in history being claimed by a customer, the vehicle history endpoint, reports and CSV export, and admin CRUD.
+The tests cover manual prices, discounts, split payments and refunds, multi-day bay scheduling, warranty and maintenance tracking, follow-ups, database upgrades, authentication and role protection, vehicle ownership, pricing and surcharges, slot capacity, the booking lifecycle, loyalty points (earning, redeeming and refunding), walk-in history being claimed by a customer, the vehicle history endpoint, reports and CSV export, and admin CRUD.
 
 ## Security notes
 - Passwords are hashed with scrypt. Sessions are random tokens stored server-side in an `HttpOnly`, `SameSite=Lax` cookie.
