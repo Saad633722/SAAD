@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Car Wash — Sign in</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🚗</text></svg>">
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <div class="landing">
+    <section class="hero">
+      <div class="brand" style="padding:0;font-size:1.3rem">🚿 <span data-business-name>Car Wash</span></div>
+      <div>
+        <h1>Sparkling clean, <br>booked in a minute.</h1>
+        <p class="lead">Choose a package, pick a time that suits you and track every wash your car has ever had — all in one place.</p>
+      </div>
+      <div class="svc" id="services"></div>
+      <div class="meta" id="hours"></div>
+    </section>
+    <section class="auth">
+      <div class="card">
+        <div class="tabs" role="tablist">
+          <button type="button" class="active" data-tab="login">Sign in</button>
+          <button type="button" data-tab="register">Create account</button>
+        </div>
+        <div class="alert hidden" id="error"></div>
+
+        <form id="login" novalidate>
+          <div class="field"><label for="l-email">Email</label><input id="l-email" name="email" type="email" autocomplete="email" required></div>
+          <div class="field"><label for="l-pass">Password</label><input id="l-pass" name="password" type="password" autocomplete="current-password" required></div>
+          <button class="btn btn-primary btn-block" type="submit">Sign in</button>
+          <p class="muted" style="margin-top:14px;font-size:.85rem">Staff and customers both sign in here — you'll be taken to the right panel automatically.</p>
+        </form>
+
+        <form id="register" class="hidden" novalidate>
+          <div class="field"><label for="r-name">Full name</label><input id="r-name" name="name" autocomplete="name" required></div>
+          <div class="field"><label for="r-email">Email</label><input id="r-email" name="email" type="email" autocomplete="email" required></div>
+          <div class="field"><label for="r-phone">Phone <small class="muted" style="display:inline">(optional)</small></label><input id="r-phone" name="phone" type="tel" autocomplete="tel"></div>
+          <div class="field"><label for="r-pass">Password</label><input id="r-pass" name="password" type="password" autocomplete="new-password" minlength="6" required><small class="muted">At least 6 characters.</small></div>
+          <button class="btn btn-primary btn-block" type="submit">Create account</button>
+        </form>
+      </div>
+    </section>
+  </div>
+  <script src="/js/common.js"></script>
+  <script src="/js/login.js"></script>
+</body>
+</html>

@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Admin — Car Wash</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🚗</text></svg>">
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="brand">🚿 <span data-business-name>Car Wash</span> <span class="brand-badge">ADMIN</span></div>
+      <nav class="nav">
+        <a href="#/"><span class="icon">📊</span> Dashboard</a>
+        <a href="#/bookings"><span class="icon">📅</span> Bookings</a>
+        <a href="#/vehicles"><span class="icon">🚗</span> Vehicles &amp; history</a>
+        <a href="#/customers"><span class="icon">👥</span> Customers</a>
+        <a href="#/services"><span class="icon">🧽</span> Services &amp; pricing</a>
+        <a href="#/staff"><span class="icon">🧑‍🔧</span> Staff</a>
+        <a href="#/reports"><span class="icon">📈</span> Reports</a>
+        <a href="#/settings"><span class="icon">⚙️</span> Settings</a>
+      </nav>
+      <div class="sidebar-footer">
+        <div class="who" data-user-name></div>
+        <div data-user-email></div>
+        <button class="btn btn-sm" data-logout>Sign out</button>
+      </div>
+    </aside>
+    <div>
+      <header class="topbar">
+        <button class="btn btn-sm" data-nav-toggle aria-label="Menu">☰</button>
+        <strong data-business-name>Car Wash</strong>
+      </header>
+      <main class="main" id="main"><div class="loading">Loading…</div></main>
+    </div>
+  </div>
+  <script src="/js/common.js"></script>
+  <script src="/admin/admin.js"></script>
+</body>
+</html>

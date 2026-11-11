@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>My Car Wash</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🚗</text></svg>">
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="brand">🚿 <span data-business-name>Car Wash</span> </div>
+      <nav class="nav">
+        <a href="#/"><span class="icon">🏠</span> Home</a>
+        <a href="#/book"><span class="icon">➕</span> Book a wash</a>
+        <a href="#/bookings"><span class="icon">📅</span> My bookings</a>
+        <a href="#/vehicles"><span class="icon">🚗</span> My vehicles</a>
+        <a href="#/profile"><span class="icon">👤</span> Profile</a>
+      </nav>
+      <div class="sidebar-footer">
+        <div class="who" data-user-name></div>
+        <div data-user-email></div>
+        <button class="btn btn-sm" data-logout>Sign out</button>
+      </div>
+    </aside>
+    <div>
+      <header class="topbar">
+        <button class="btn btn-sm" data-nav-toggle aria-label="Menu">☰</button>
+        <strong data-business-name>Car Wash</strong>
+      </header>
+      <main class="main" id="main"><div class="loading">Loading…</div></main>
+    </div>
+  </div>
+  <script src="/js/common.js"></script>
+  <script src="/app/app.js"></script>
+</body>
+</html>
